@@ -5,8 +5,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const suites = [
+  ['launch-animation', ['scripts/test-launch-animation.mjs']],
+  ['disclaimer-gate', ['scripts/test-disclaimer-gate.mjs']],
   ['settings', ['scripts/test-settings-ux.mjs']],
   ['settings-disclosure', ['scripts/test-settings-disclosure.mjs']],
+  ['settings-frame', ['scripts/test-settings-frame.mjs']],
   ['visual-alignment', ['scripts/test-visual-alignment.mjs']],
   ['search', ['scripts/test-search-recovery.mjs']],
   ['discovery', ['scripts/test-discover-recovery.mjs']],
@@ -24,6 +27,7 @@ const suites = [
   ['tag-feed', ['scripts/test-tag-feed.mjs']],
   ['tag-posts', ['scripts/test-post-tag-blocking.mjs']],
   ['preferences-journey', ['scripts/test-content-preferences-journey.mjs']],
+  ['preferences-ux', ['scripts/test-preferences-ux.mjs']],
 ];
 const output = new URL(`../test-results/ui-recovery/${Date.now()}/`, import.meta.url);
 mkdirSync(output, { recursive: true });

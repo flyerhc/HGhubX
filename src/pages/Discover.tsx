@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, fmt } from "../api";
 import type { VideoCard } from "../types";
 import { useStore } from "../store";
-import { useContentPreferences } from "../contentPreferences";
+import { MAX_BLOCKED_TAGS, MAX_TAG_LENGTH, useContentPreferences } from "../contentPreferences";
 import { Masonry } from "../components/cards";
 import { InplaceSearch } from "../components/InplaceSearch";
 import { Empty, Img } from "../components/ui";
@@ -226,9 +226,10 @@ export function TagsPage({ onBack, wide }: { onBack: () => void; wide: boolean }
 /* ================= 标签视频页 ================= */
 export function TagPage({ tag, name, onBack, wide }: { tag: string; name: string; onBack: () => void; wide: boolean }) {
   const { push } = useStore();
-  const { preferences, isTagBlocked, blockTags, unblockTag } = useContentPreferences();
+  const { preferences, storageError, isTagBlocked, blockTags, unblockTag } = useContentPreferences();
   const filtering = !preferences.paused && (preferences.blockedTags.length > 0 || preferences.hideUntagged);
   const tagBlocked = isTagBlocked(name);
+  const cannotAdd = !name.trim() || name.trim().length > MAX_TAG_LENGTH || preferences.blockedTags.length >= MAX_BLOCKED_TAGS;
   const [searching, setSearching] = useState(false);
   const [items, setItems] = useState<VideoCard[]>([]);
   const [page, setPage] = useState(0);
@@ -292,8 +293,18 @@ export function TagPage({ tag, name, onBack, wide }: { tag: string; name: string
         </div>
       </div>
       <div ref={scrollContainer} className="flex-1 scroll-y px-4 pt-3 pb-8" aria-busy={loading || !current}>
-        <Button style={{ minBlockSize: 44 }} aria-pressed={tagBlocked} onClick={() => tagBlocked ? unblockTag(name) : blockTags([name])}
-          className="mb-3 min-h-11 rounded-(--r-ctl) bg-s2 px-4 text-[13px] text-primary">{tagBlocked ? "取消屏蔽此标签" : "屏蔽此标签"}</Button>
+        <Surface className="mb-3 rounded-(--r-md) p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="min-w-0 text-[13px] text-mut">{tagBlocked ? "此标签已加入屏蔽列表" : "不喜欢这类内容？可屏蔽整个标签。"}</p>
+            <Button style={{ minBlockSize: 44 }} disabled={!tagBlocked && cannotAdd} aria-pressed={tagBlocked}
+              onClick={() => tagBlocked ? unblockTag(name) : blockTags([name])}
+              className="min-h-11 rounded-(--r-ctl) bg-s2 px-4 text-[13px] text-primary">{tagBlocked ? "取消屏蔽此标签" : "屏蔽此标签"}</Button>
+          </div>
+          {preferences.paused && <p role="status" className="mt-2 text-[12px] text-mut">屏蔽已暂停，新增标签会保存，恢复后生效。</p>}
+          {!tagBlocked && cannotAdd && <p role="status" className="mt-2 text-[12px] text-mut">{name.trim().length > MAX_TAG_LENGTH ? "标签过长，请在内容偏好中管理。" : `已达到 ${MAX_BLOCKED_TAGS} 个标签上限。`}</p>}
+          {storageError && <p role="alert" className="mt-2 text-[13px] text-danger">{storageError}</p>}
+          <Button className="mt-1 min-h-11 px-3 text-[12px] text-primary" onClick={() => push({ kind: "settings", section: "内容偏好" })}>管理屏蔽标签</Button>
+        </Surface>
         {(loading || !current) && !visibleItems.length ? (
           <div className="flex justify-center py-12"><Loader className="w-8 h-8 spinner" /></div>
         ) : err && !visibleItems.length ? (

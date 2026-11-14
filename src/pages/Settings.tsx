@@ -7,6 +7,8 @@ import LinePicker from "../components/LinePicker";
 import ProxySettings from "../components/ProxySettings";
 import ContentPreferencesSettings from "../components/ContentPreferencesSettings";
 import SettingsSection from "../components/SettingsSection";
+import { UsageAgreementText } from "../components/UsageAgreement";
+import { USAGE_AGREEMENT_VERSION } from "../usageAgreement";
 import { autoLineEnabled, setAutoLine } from "../autoLine";
 import { copyPlaybackLog, initPlaybackLog, setPlaybackLog, tracePlayback, usePlaybackLog } from "../playbackDiagnostics";
 import { formatNetDiag, shortVerdict } from "../netDiagReport";
@@ -23,14 +25,15 @@ const GROUP_SUMMARIES: Record<SettingGroup, string> = {
   本地数据: "收藏、观看记录与缓存",
   网络: "代理、线路与连接诊断",
   播放诊断: "详细日志与问题排查",
-  其他: "检查更新与关于应用",
+  其他: "检查更新、使用协议与关于应用",
 };
 
 /* 独立设置页：线路 / 外观 / 播放 / 本地数据 / 清理缓存 / 网络诊断 / 关于
    入口：Windows 侧栏「设置」、Android「我的」右上角齿轮 */
-export default function Settings({ onBack }: { onBack: () => void; wide: boolean }) {
+export default function Settings({ onBack, initialSection }: { onBack: () => void; wide: boolean; initialSection?: "内容偏好" }) {
   const { theme, themePreference, setTheme, favs, history, muteOnStartup, setMuteOnStartup, preferHevc, setPreferHevc, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity, toast } = useStore();
   const [about, setAbout] = useState(false);
+  const [agreementOpen, setAgreementOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [lineOpen, setLineOpen] = useState(false);
   const [lineBase, setLineBase] = useState("");
@@ -48,7 +51,17 @@ export default function Settings({ onBack }: { onBack: () => void; wide: boolean
   const [diagnosing, setDiagnosing] = useState(false);
   const [diagReport, setDiagReport] = useState<string | null>(null);
   const [copyingReport, setCopyingReport] = useState(false);
-  const [openGroups, setOpenGroups] = useState<Set<SettingGroup>>(() => new Set());
+  const [openGroups, setOpenGroups] = useState<Set<SettingGroup>>(() => new Set(initialSection ? [initialSection] : []));
+  const contentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!initialSection) return;
+    const frame = requestAnimationFrame(() => {
+      const target = contentRef.current?.querySelector<HTMLElement>(`#settings-${initialSection}`);
+      target?.scrollIntoView({ block: "start", behavior: "instant" });
+      target?.querySelector<HTMLElement>(".ios-settings-trigger")?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [initialSection]);
   const section = (title: SettingGroup, children: ReactNode) => <SettingsSection title={title} summary={GROUP_SUMMARIES[title]}
     open={openGroups.has(title)} onToggle={() => setOpenGroups(previous => {
       const next = new Set(previous);
@@ -110,7 +123,7 @@ export default function Settings({ onBack }: { onBack: () => void; wide: boolean
         </div>
       </div>
       <div data-settings-scroll className="ios-page-body flex-1 min-h-0 scroll-y">
-        <div className="ios-settings-column ios-settings-content">
+        <div ref={contentRef} className="ios-settings-column ios-settings-content">
           <div className="pt-1 pb-4">
             <h1 className="ios-page-title text-on">设置</h1>
             <p className="text-[13px] text-mut mt-2">让 HGhubX 更合你的习惯</p>
@@ -290,6 +303,14 @@ export default function Settings({ onBack }: { onBack: () => void; wide: boolean
               </div>
               <IChevR size={15} className="text-mut" />
             </Button>
+            <Button onClick={() => setAgreementOpen(true)} className="w-full flex items-center gap-3 px-3.5 py-3 text-left pressable">
+              <span className="ios-setting-icon"><ILockF size={16} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] text-on">使用条款与免责声明</div>
+                <div className="text-[12px] text-mut">查看完整协议与中国大陆下载传播限制</div>
+              </div>
+              <IChevR size={15} className="text-mut" />
+            </Button>
             <Button onClick={() => setAbout(true)} className="w-full flex items-center gap-3 px-3.5 py-3 text-left pressable">
               <span className="ios-setting-icon"><IInfo size={16} /></span>
               <div className="flex-1">
@@ -305,6 +326,19 @@ export default function Settings({ onBack }: { onBack: () => void; wide: boolean
       </div>
 
       <LinePicker open={lineOpen} onClose={() => { setLineOpen(false); readLine(); }} />
+
+      <Modal label="使用条款与免责声明" open={agreementOpen} onClose={() => setAgreementOpen(false)} width={680}>
+        <div className="flex flex-col min-h-0 max-h-[78dvh]">
+          <div className="shrink-0 flex items-center justify-between gap-3 p-4 border-b border-s3">
+            <h2 className="text-[17px] font-bold text-on">使用条款与免责声明</h2>
+            <Button className="min-h-11 px-3 shrink-0" onClick={() => setAgreementOpen(false)}>关闭</Button>
+          </div>
+          <div className="flex-1 min-h-0 scroll-y p-4 select-text" tabIndex={0} aria-label="协议正文">
+            <p className="text-[12px] text-mut mb-4">协议版本 {USAGE_AGREEMENT_VERSION} · 查看协议不会更改本机确认记录</p>
+            <UsageAgreementText />
+          </div>
+        </div>
+      </Modal>
 
       <Modal label="网络诊断报告" open={diagReport !== null} onClose={() => setDiagReport(null)} width={520}>
         <div className="p-5">
@@ -341,8 +375,8 @@ export default function Settings({ onBack }: { onBack: () => void; wide: boolean
           </p>
 
           <Surface className="mt-4 rounded-(--r-sm) bg-s3/60 p-3 text-[12px] text-mut leading-relaxed">
-            本项目仅供学习与交流，所有内容均来自上游站点，客户端不存储、不分发任何视频内容。
-            请于 24 小时内删除相关资源，并支持正版。
+            仅限符合使用条款的成年人使用；禁止在中国大陆地区下载和传播本软件及相关资源。
+            第三方内容的权利属于各自权利人，访问内容不代表获得下载或传播授权。
           </Surface>
 
           <div className="mt-4 divide-y divide-s3">

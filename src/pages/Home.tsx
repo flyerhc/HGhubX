@@ -8,6 +8,7 @@ import { ISearch } from "../icons";
 import { Empty } from "../components/ui";
 import { Button } from "../components/ios/controls";
 import { useContentPreferences } from "../contentPreferences";
+import { PreferenceStorageNotice } from "../components/PreferenceStorageNotice";
 
 /* Fisher-Yates 洗牌：首页第一页随机打乱，避免每次进来都停在同一个 top1 */
 function shuffle<T>(arr: T[]): T[] {
@@ -21,7 +22,7 @@ function shuffle<T>(arr: T[]): T[] {
 
 export default function Home({ active, bottomInset }: { active: boolean; bottomInset: number }) {
   const { toast, lineEpoch, push } = useStore();
-  const { preferences, revision, blockReason } = useContentPreferences();
+  const { preferences, revision, blockReason, storageError } = useContentPreferences();
   const filtering = !preferences.paused && (preferences.blockedTags.length > 0 || preferences.hideUntagged);
   const [excluded, setExcluded] = useState<{ revision: number; epoch: number; ids: number[] }>({ revision, epoch: lineEpoch, ids: [] });
   const autoFill = useRef(1);
@@ -120,7 +121,11 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
 
 
   return (
-    <div className="absolute inset-0 bg-black">
+    <div className="absolute inset-0 bg-black flex flex-col">
+      {storageError && <div className="shrink-0 bg-bg px-3 pb-2" style={{ paddingTop: "max(8px, var(--sat, env(safe-area-inset-top, 0px)))" }}>
+        <PreferenceStorageNotice />
+      </div>}
+      <div className="relative flex-1 min-h-0">
       {ids.length > 0 && (active || feedMounted) ? (
         <Feed videoIds={ids} mode="home" active={active} bottomInset={bottomInset} onBlocked={onBlocked}
           onNearEnd={() => { if (!loading && !done && Date.now() >= retryAt.current) load(page + 1); }} />
@@ -129,7 +134,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
           <Empty icon={<ISearch size={26} />} title="已隐藏不感兴趣的内容"
             sub={loading ? "正在补充其他内容…" : error ? `继续加载失败：${error}` : done ? "当前推荐已筛选完，可调整屏蔽标签。" : "已达到本次自动补充上限，可继续加载。"} />
           {loading ? <Loader label="正在补充内容" /> : !done && <Button className="mt-3 px-5 rounded-full bg-s3" onClick={loadNextFilteredPage}>{error ? "重试加载" : "继续加载"}</Button>}
-          <Button className="mt-3 px-4 text-primary" onClick={() => push({ kind: "settings" })}>管理屏蔽标签</Button>
+          <Button className="mt-3 px-4 text-primary" onClick={() => push({ kind: "settings", section: "内容偏好" })}>管理屏蔽标签</Button>
         </div>
       ) : !loading && error ? (
         <div className="absolute inset-0 flex items-center justify-center bg-bg">
@@ -140,6 +145,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
       ) : (
         <div className="absolute inset-0 flex items-center justify-center"><Loader className="w-9 h-9 spinner" /></div>
       )}
+      </div>
     </div>
   );
 }

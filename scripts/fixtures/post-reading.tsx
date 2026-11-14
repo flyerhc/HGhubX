@@ -5,9 +5,10 @@ import { PostDetail, PostsPage } from '../../src/pages/Posts';
 import '../../src/index.css';
 function Harness() {
   const [id, setId] = useState(1);
-  Object.assign(window, { postReading: { setId } });
+  const [active, setActive] = useState(false);
+  Object.assign(window, { postReading: { setId, setActive } });
   return <div className="plat-ios" style={{ position: 'absolute', inset: 0 }}>
-    {location.search.includes('list') ? <PostsPage onBack={() => {}} wide={innerWidth > 640} /> : <PostDetail id={id} onBack={() => {}} active={false} />}
+    {location.search.includes('list') ? <PostsPage onBack={() => {}} wide={innerWidth > 640} /> : <PostDetail id={id} onBack={() => {}} active={active} />}
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<AppProvider><Harness /></AppProvider>);

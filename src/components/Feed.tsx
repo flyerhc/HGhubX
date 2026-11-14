@@ -1,16 +1,15 @@
-import { Button, Image, SegmentedControl, Surface } from "./ios/controls";
+import { Button, Image, SegmentedControl } from "./ios/controls";
 import { Loader } from "./ios/effects";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { api, cover, fmt, fmtTime, isMobile, logLine, mediaUrl } from "../api";
 import type { Detail, Episode, Post, VideoCard } from "../types";
 import { useStore } from "../store";
-import { Avatar, Img, Sheet } from "./ui";
+import { Img, Sheet } from "./ui";
 import VideoSurface, { type VideoHandle } from "./VideoSurface";
 import PlayerControls from "./PlayerControls";
 import PlaybackLock from "./PlaybackLock";
 import { ArticlePanel, CommentsPanel, EpisodesPanel } from "./Panels";
-import { RowCard } from "./cards";
 import { setBackHandler } from "../back";
 import { copyText } from "../clipboard";
 import { tracePlayback } from "../playbackDiagnostics";
@@ -18,9 +17,9 @@ import { createPlaybackClock } from "../playbackClock";
 import { useContentPreferences } from "../contentPreferences";
 import { ContentBlockNotice } from "./ContentBlockNotice";
 import { TagBlockMenu } from "./TagBlockMenu";
-import { FilteredContent } from "./FilteredContent";
+import VideoDetailsPanel from "./VideoDetailsPanel";
 import {
-  IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IFileText, IHeart, IHeartF,
+  IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IFileText, IHeart, IHeartF, IMore,
   ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
 } from "../icons";
 
@@ -84,7 +83,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [waiting, setWaiting] = useState(false);
   const [err, setErr] = useState("");
   const [panel, setPanel] = useState<"episodes" | "comments" | "article" | "detail" | null>(null);
-  const [descOpen, setDescOpen] = useState(false);
   /* 续播：拿到时长后再 seek 一次（只对进入时那一条生效） */
   const resumeRef = useRef<{ key: string; t: number } | null>(
     startTime && startTime > 1 ? { key: `${videoIds[startIndex]}:${startEp || 1}`, t: startTime } : null,
@@ -162,9 +160,13 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const tagsReady = !!checked[tagKey];
   const blocked = filtering && tagsReady ? blockReason(currentTags) : null;
   const allowed = !filtering || (tagsReady && (!blocked || (mode !== "home" && viewOnce === permissionKey)));
-  const openPreferences = () => store.push({ kind: "settings" });
+  const closePanels = () => { setPanel(null); setTagMenu(false); };
+  const openPreferences = () => { closePanels(); store.push({ kind: "settings", section: "内容偏好" }); };
+  const openTagMenu = () => { setPanel(null); setTagMenu(true); };
+  const openTag = (tag: string) => { closePanels(); store.push({ kind: "tag", tag, name: tag }); };
   const backFromBlock = () => onBack ? onBack() : store.setTab("category");
-  useEffect(() => { setViewOnce(""); setTagMenu(false); }, [curId, revision, store.lineEpoch, accountScope]);
+  useEffect(() => { setViewOnce(""); }, [curId, revision, store.lineEpoch, accountScope]);
+  useEffect(() => { setTagMenu(false); }, [curId, store.lineEpoch, accountScope]);
   useEffect(() => { if (blocked && mode === "home" && active) onBlocked?.(curId); }, [blocked, mode, active, curId, onBlocked]);
   useEffect(() => { if (!allowed) { setPanel(null); setTagMenu(false); } }, [allowed]);
   const curEp = epMap[curId] || 1;
@@ -482,7 +484,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /* 切换条目/集数时重置播放状态 */
   useEffect(() => {
-    setTime(0); setDuration(0); bufferedRef.current = 0; setErr(""); setWaiting(true); setPaused(false); setDescOpen(false);
+    setTime(0); setDuration(0); bufferedRef.current = 0; setErr(""); setWaiting(true); setPaused(false);
     playbackClock.publish(0);
     setVsize({ w: 0, h: 0 });
     setPortraitFit("contain");
@@ -598,7 +600,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         cur.mode = "hold";
         if (cur.zone === "menu") {
           holdRef.current = false;
-          setTagMenu(true);
+          openTagMenu();
         } else {
           holdRef.current = true;
           if (cur.zone === "slow") setHoldSlow(true);
@@ -742,7 +744,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   useEffect(() => {
     if (!active || controlsLocked) {
-      if (!active) setPanel(null);
+      if (!active) { setPanel(null); setTagMenu(false); }
       onUp(true);
       if (lastTapRef.current.timer) window.clearTimeout(lastTapRef.current.timer);
       lastTapRef.current.timer = null;
@@ -992,6 +994,12 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     return Math.max(0, base + Number(liked) - Number(!!loadedLiked));
   }, [meta.like, liked, kind, detail?.interaction, curEp]);
 
+  const detailBody = (onClose?: () => void) => <VideoDetailsPanel meta={meta} videoId={curId} episodeCount={episodes.length}
+    related={related} following={store.follows.includes(meta.authorId)} followPending={followPending}
+    onFollow={() => void onFollow()} onTag={openTag} onClose={onClose} onPreferences={openTagMenu}
+    onAuthor={() => { if (meta.authorId > 0) { closePanels(); store.push({ kind: "user", id: meta.authorId, name: meta.author }); } }}
+    onRelated={video => { closePanels(); store.push({ kind: "feed", videoIds: related.map(item => item.id), index: related.findIndex(item => item.id === video.id), title: "相关推荐" }); }} />;
+
   if (curId && !allowed) {
     const error = tagErrors[tagKey];
     const pending = !tagsReady && !error;
@@ -1042,8 +1050,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 <div className="absolute inset-0" style={{ touchAction: swipeEp ? "none" : "pan-y" }}
                   onPointerDown={onDown} onPointerMove={onMove} onPointerUp={(e) => onUp(false, e)} onPointerCancel={(e) => onUp(true, e)} onLostPointerCapture={(e) => onUp(true, e)}>
                 <div style={{ position: "absolute", inset: 0, transform: isDesktop ? undefined : `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.s})`, transformOrigin: "center center", transition: isDesktop || zoom.g ? "none" : "transform .18s ease-out" }}>
-                <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay active={active} muted={muted}
-                  diagnosticContext={{ active, view: mode, kind, video_id: curId, episode: curEp }}
+                <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay active={active && !tagMenu} muted={muted}
+                  diagnosticContext={{ active: active && !tagMenu, view: mode, kind, video_id: curId, episode: curEp }}
                   volume={volume} rate={effRate}
                   fit={isDesktop ? "contain" : landscapeVideo ? (fs || vpLandscape ? "contain" : portraitFit) : (vpLandscape ? "contain" : "cover")}
                   onClick={() => { if (isDesktop) videoRef.current?.toggle(); }}
@@ -1161,7 +1169,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               {/* 右侧操作栏（移动端）：收藏 / 评论 / 全屏 / 分享
                   颜色写死不跟主题走：浅色主题下这些字必须仍是白色 */}
               {!fs && !clean && !isDesktop && (
-                <div className="absolute right-3 z-20 flex flex-col items-center gap-[16px]"
+                <div className="mobile-video-action-rail absolute right-3 z-20 flex flex-col items-center gap-[16px]"
                   style={{ bottom: `calc(var(--sab, 0px) + ${bottomInset + 92}px)` }}>
                   {episodes.length > 1 && (
                     <Button type="button" onClick={() => { setSwipeEp(!swipeEp); toast(swipeEp ? "上下划切集已关闭" : "上下划切集已开启"); }}
@@ -1267,15 +1275,14 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
                 <p className="mt-1 text-[14px] leading-snug hg-ink-2 hg-ov-shadow clamp-2">{meta.title}</p>
 
-                {/* 描述（单行，点开展开） */}
-                <Button onClick={() => setDescOpen((v) => !v)} className="mt-1 text-left w-full pressable group">
-                  <p className={`text-[12px] leading-relaxed hg-ink-4 ${descOpen ? "" : "clamp-1"}`}>
-                    {meta.desc || "暂无简介"}
-                  </p>
-                  <span className="text-[12px] hg-link font-semibold">{descOpen ? "收起" : "展开简介"}</span>
-                </Button>
-                {isActive && <Button aria-label="不感兴趣" onClick={() => setTagMenu(true)}
-                  style={{ minHeight: 44 }} className="mt-2 px-4 rounded-full hg-chip text-[12px]">不感兴趣</Button>}
+                <p className="mt-1 text-[12px] leading-relaxed hg-ink-4 clamp-1">{meta.desc || "暂无简介"}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button aria-label="视频详情" onClick={() => setPanel("detail")} className="min-h-11 px-4 rounded-full hg-chip text-[12px] inline-flex items-center gap-1">
+                    详情与标签<IChevR size={13} />
+                  </Button>
+                  {isActive && <Button aria-label="不感兴趣" title="不感兴趣 / 内容偏好" onClick={openTagMenu}
+                    className="video-preference-trigger"><IMore size={19} aria-hidden="true" /></Button>}
+                </div>
               </div>
               )}
 
@@ -1284,17 +1291,17 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   进度条轨道几乎不可见，只用白点标播放位置。 */}
               {!fs && !clean && !isDesktop && (
                 <div className="absolute inset-x-0 z-20" style={{ bottom: `calc(var(--sab, 0px) + ${bottomInset}px)` }}>
-                  <div className="relative px-4 pb-2 flex items-center gap-2">
+                  <div className="mobile-video-meta-copy relative pb-2 flex items-center gap-2">
                     <p className="flex-1 min-w-0 text-[15px] font-semibold leading-snug hg-ink-2 hg-ov-shadow-strong clamp-2">{meta.title}</p>
                   </div>
                   <div className="relative pt-1.5 pb-2.5">
-                    <div className="flex flex-wrap items-center gap-2 px-4">
-                    <Button onClick={() => setPanel("detail")}
-                      className="min-h-11 flex items-center gap-0.5 text-[12px] font-medium hg-ink-3 hg-ov-shadow-strong pressable">
-                      详情 · 第 {curEp} 集<IChevR size={11} />
-                    </Button>
-                    {isActive && <Button aria-label="不感兴趣" onClick={() => setTagMenu(true)}
-                      style={{ minHeight: 44 }} className="px-4 rounded-full hg-chip text-[12px]">不感兴趣</Button>}
+                    <div className="mobile-video-meta-copy flex flex-wrap items-center gap-2">
+                      <Button aria-label="视频详情" onClick={() => setPanel("detail")}
+                        className="min-h-11 flex items-center gap-0.5 text-[12px] font-medium hg-ink-3 hg-ov-shadow-strong pressable">
+                        详情 · 第 {curEp} 集<IChevR size={11} />
+                      </Button>
+                      {isActive && <Button aria-label="不感兴趣" title="不感兴趣 / 内容偏好" onClick={openTagMenu}
+                        className="video-preference-trigger"><IMore size={19} aria-hidden="true" /></Button>}
                     </div>
                     <div ref={barRef} className="mx-4 mt-2 relative" style={{ height: 14, touchAction: "none" }}
                       onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
@@ -1479,7 +1486,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       {isDesktop ? (
         <div className={`desktop-dock-panel ${panel ? "is-open" : ""}`}>
           <div className="desktop-dock-inner">
-            {panel === "episodes" ? (
+            {panel === "detail" ? detailBody(() => setPanel(null)) : panel === "episodes" ? (
               <EpisodesPanel videoId={curId} episodes={episodes} current={curEp} onPick={pickEp} onClose={() => setPanel(null)} />
             ) : panel === "comments" ? (
               <CommentsPanel videoId={curId} ep={curEp} total={meta.comment} kind={kind} onClose={() => setPanel(null)} />
@@ -1489,21 +1496,21 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       ) : (
         <>
           {/* 评论：移动端底部弹层（右侧操作栏「评论」入口） */}
-          <Sheet open={panel === "comments"} onClose={() => setPanel(null)}>
+          <Sheet open={active && panel === "comments"} onClose={() => setPanel(null)}>
             <div className="flex flex-col" style={{ height: "72vh" }}>
               <CommentsPanel videoId={curId} ep={curEp} total={meta.comment} kind={kind} onClose={() => setPanel(null)} />
             </div>
           </Sheet>
 
           {/* 吃瓜图文正文 */}
-          <Sheet open={panel === "article"} onClose={() => setPanel(null)}>
+          <Sheet open={active && panel === "article"} onClose={() => setPanel(null)}>
             <div className="flex flex-col" style={{ height: "78vh" }}>
               <ArticlePanel title={meta.title} html={articleHtml} cover={meta.cover} hot={post?.hot} onClose={() => setPanel(null)} />
             </div>
           </Sheet>
 
-          <Sheet open={panel === "detail" || panel === "episodes"} onClose={() => setPanel(null)}>
-            <div className="flex flex-col" style={{ height: "72vh" }}>
+          <Sheet open={active && (panel === "detail" || panel === "episodes")} label={panel === "detail" ? "视频详情" : "选集"} onClose={() => setPanel(null)}>
+            <div className="video-details-sheet">
               {/* 双栏抽屉：详情 / 选集 */}
               <div className="shrink-0 flex items-center gap-2 px-4 pb-2">
                 <SegmentedControl className="flex-1" aria-label="剧集面板" activeIndex={panel === "detail" ? 0 : 1}>
@@ -1521,73 +1528,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 {panel === "episodes" ? (
                   <EpisodesPanel bare videoId={curId} episodes={episodes} current={curEp} onPick={pickEp} onClose={() => setPanel(null)} />
                 ) : (
-                  <div className="h-full scroll-y px-4 pb-5">
-                    {/* 封面 / 标题 / 评分 / 数据 */}
-                    <div className="flex gap-3">
-                      <Surface className="relative w-[84px] shrink-0 rounded-(--r-sm) overflow-hidden bg-s3" style={{ aspectRatio: "3 / 4" }}>
-                        <Img src={meta.cover} />
-                      </Surface>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[14px] font-bold text-on leading-snug clamp-2">{meta.title}</div>
-                        <div className="flex items-center gap-2 mt-1.5">
-                          {!!meta.score && <span className="text-[13px] font-bold text-amber">{meta.score.toFixed(1)} 分</span>}
-                          {episodes.length > 0 && <span className="text-[12px] text-mut">共 {episodes.length} 集</span>}
-                        </div>
-                        <div className="flex gap-3 mt-2 text-[12px] text-mut">
-                          <span>点赞 {fmt(meta.like)}</span>
-                          <span>收藏 {fmt(meta.collect)}</span>
-                          <span>评论 {fmt(meta.comment)}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 标签 */}
-                    {meta.tags && meta.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        {meta.tags.map((tag) => (
-                          <span key={tag} className="px-2.5 h-7 flex items-center rounded-full bg-s3 text-[12px] text-mut">{tag}</span>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* 作者 + 关注 */}
-                    <Surface className="mt-4 flex items-center gap-2.5 rounded-(--r-md) bg-s2 p-2.5">
-                      <Button
-                        onClick={() => meta.authorId > 0 && store.push({ kind: "user", id: meta.authorId, name: meta.author })}
-                        className="flex items-center gap-2.5 flex-1 min-w-0 text-left pressable"
-                        disabled={meta.authorId <= 0}>
-                        <Avatar size={34} name={meta.author} hue={220} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[14px] font-semibold text-on truncate">{meta.author}</div>
-                          <div className="text-[12px] text-mut">作者</div>
-                        </div>
-                      </Button>
-                      {meta.authorId > 0 && (
-                        <Button onClick={() => void onFollow()} disabled={followPending} aria-busy={followPending}
-                          className={`h-7 px-3 rounded-full text-[12px] font-semibold pressable shrink-0 ${store.follows.includes(meta.authorId) ? "bg-s3 text-mut" : "bg-primary text-on-primary"}`}>
-                          {store.follows.includes(meta.authorId) ? "已关注" : "+ 关注"}
-                        </Button>
-                      )}
-                    </Surface>
-
-                    {/* 相关推荐 */}
-                    {related.length > 0 && (
-                      <div className="mt-4">
-                        <div className="text-[12px] font-semibold text-dim mb-2">相关推荐</div>
-                        <FilteredContent items={related.slice(0, 12)} scopeKey={curId}>{visible => <div className="scroll-x flex gap-2.5 snap-x">
-                          {visible.map((v) => (
-                            <RowCard key={v.id} v={v} onOpen={() => store.push({ kind: "feed", videoIds: related.map((x) => x.id), index: related.findIndex((x) => x.id === v.id), title: "相关推荐" })} />
-                          ))}
-                        </div>}</FilteredContent>
-                      </div>
-                    )}
-
-                    {/* 简介 */}
-                    <div className="mt-4">
-                      <div className="text-[12px] font-semibold text-dim mb-1.5">简介</div>
-                      <p className="text-[12px] leading-relaxed text-mut whitespace-pre-wrap">{meta.desc || "暂无简介"}</p>
-                    </div>
-                  </div>
+                  detailBody()
                 )}
               </div>
             </div>
@@ -1611,7 +1552,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
             className="hg-chip w-9 h-9 rounded-full flex items-center justify-center pressable elev-1"><ISearch size={18} /></Button>}
         </div>
       )}
-      <TagBlockMenu open={tagMenu} tags={meta.tags} onClose={() => setTagMenu(false)} onSettings={openPreferences} />
+      <TagBlockMenu open={active && tagMenu} tags={meta.tags} onClose={() => setTagMenu(false)} onSettings={openPreferences} />
       {controlsLocked && <PlaybackLock active={active} onUnlock={() => { setControlsLocked(false); wake(); }} />}
     </div>
   );

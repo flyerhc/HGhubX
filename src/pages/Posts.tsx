@@ -118,10 +118,12 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
   const [loadedId, setLoadedId] = useState<number | null>(null);
   const [viewOnce, setViewOnce] = useState("");
   const [tagMenu, setTagMenu] = useState(false);
+  useEffect(() => { if (!active) setTagMenu(false); }, [active]);
   const currentPost = loadedId === id ? post : null;
   const blocked = currentPost ? blockReason(currentPost.tags) : null;
   const bypassKey = `${id}:${revision}`;
   const allowed = !filtering || (!!currentPost && (!blocked || viewOnce === bypassKey));
+  useEffect(() => { if (!allowed) setTagMenu(false); }, [allowed]);
   const [err, setErr] = useState<string | null>(null);
   const [play, setPlay] = useState(false);
   /* 吃瓜帖详情里的 video_url 恒为空，视频地址只在 playback 接口里；
@@ -185,14 +187,14 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
   // Guard the whole surface: no poster, article HTML or media element is mounted while blocked.
   if (currentPost && blocked && viewOnce !== bypassKey) return <ContentBlockNotice
     reason={blocked} onViewOnce={() => setViewOnce(bypassKey)} onBack={onBack}
-    onSettings={() => push({ kind: "settings" })} />;
+    onSettings={() => push({ kind: "settings", section: "内容偏好" })} />;
 
   return (
     <div className="ios-page absolute inset-0 bg-bg flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-2 bg-s1" style={{ paddingTop: isMobile ? "var(--sat, 0px)" : 0, height: isMobile ? "calc(44px + var(--sat, 0px))" : 44 }}>
         <Button aria-label="返回" onClick={onBack} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><IBack size={19} /></Button>
         <span className="text-[14px] font-semibold text-on">吃瓜详情</span>
-        <Button disabled={!currentPost} onClick={() => setTagMenu(true)} className="ml-auto px-3 text-[13px]">不感兴趣</Button>
+        <Button disabled={!currentPost} onClick={() => { if (active && allowed) setTagMenu(true); }} className="ml-auto px-3 text-[13px]">不感兴趣</Button>
       </div>
 
       <div role="progressbar" aria-label="阅读进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={readProgress} className="h-1 shrink-0 bg-s3 overflow-hidden"><div className="h-full bg-primary" style={{ width: `${readProgress}%` }} /></div>
@@ -209,8 +211,8 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
           <>
             <div data-post-media className="relative w-full bg-black mx-auto" style={{ height: isMobile ? "min(48vh, 420px)" : "min(60vh, 640px)" }}>
               {play && src ? (
-                <Player src={src} poster={cover(currentPost.cover)} autoPlay active={active} controls muted={muted}
-                  onToggleMute={() => setMuted((m) => !m)} diagnosticContext={{ video_id: id, active }} className="w-full h-full"
+                <Player src={src} poster={cover(currentPost.cover)} autoPlay active={active && !tagMenu} controls muted={muted}
+                  onToggleMute={() => setMuted((m) => !m)} diagnosticContext={{ video_id: id, active: active && !tagMenu }} className="w-full h-full"
                   onEnded={() => {
                     /* 多段吃瓜视频：播完自动接下一段 */
                     if (seg < segs.length - 1) setSeg(seg + 1); else setPlay(false);
@@ -263,7 +265,7 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
           </>
         )}
       </div>
-      <TagBlockMenu open={tagMenu} tags={currentPost?.tags || []} onClose={() => setTagMenu(false)} onSettings={() => push({ kind: "settings" })} />
+      <TagBlockMenu open={tagMenu && active} tags={currentPost?.tags || []} onClose={() => setTagMenu(false)} onSettings={() => push({ kind: "settings", section: "内容偏好" })} />
     </div>
   );
 }

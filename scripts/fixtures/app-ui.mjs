@@ -13,6 +13,9 @@ export function installFixture({ theme, titles }) {
   const accountSnapshot = () => ({ user: accountUser, origin: accountOrigin, interactions });
   let loggedIn = false;
   localStorage.setItem("hghubx_theme", theme);
+  // These UI suites exercise returning users. Keep the version in sync with
+  // src/usageAgreement.ts; this function is serialized into addInitScript.
+  localStorage.setItem("hghubx_usage_agreement", JSON.stringify({ version: "2026-11-15-v1", accepted: true, acceptedAt: "2026-11-15T00:00:00.000Z" }));
   localStorage.setItem("hghubx_app_v1", JSON.stringify({ favs: [1, 2, 3, 4, 5, 6], history: [{ id: 1, ep: 3, t: 55, dur: 180, at: 123 }], searchHist: ["都市"] }));
   // This account has its own seconds cache; guest records are never imported on login.
   localStorage.setItem("hghubx_accounts_v1", JSON.stringify({ version: 1, accounts: {

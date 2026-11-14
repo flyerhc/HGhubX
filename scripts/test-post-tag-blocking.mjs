@@ -70,10 +70,18 @@ try {
     await page.evaluate(() => window.postReading.setId(3));
     await page.getByRole('heading', { name: '测试帖子 3' }).waitFor();
     await page.getByRole('button', { name: '不感兴趣', exact: true }).click();
+    assert.equal(await page.getByRole('dialog', { name: '不感兴趣' }).count(), 0, 'Inactive post cannot open a preference overlay');
+    // This fixture normally pauses media; interactive overlays belong to the active page.
+    await page.evaluate(() => window.postReading.setActive(true));
+    assert.equal(await page.getByRole('dialog', { name: '不感兴趣' }).count(), 0, 'Activating a post does not reopen an inactive menu intent');
+    await page.getByRole('button', { name: '不感兴趣', exact: true }).click();
     const menu = page.getByRole('dialog', { name: '不感兴趣' });
     await menu.getByRole('button', { name: '轻喜剧', exact: true }).click();
     await menu.getByRole('button', { name: '屏蔽所选标签' }).click();
     await page.getByRole('heading', { name: '内容已屏蔽' }).waitFor();
+    await page.getByRole('button', { name: '本次查看', exact: true }).click();
+    await page.getByRole('heading', { name: '测试帖子 3' }).waitFor();
+    assert.equal(await page.getByRole('dialog', { name: '不感兴趣' }).count(), 0, 'Viewing once does not reopen the previous preference menu');
     report.checks.push(`${width}: tag menu blocks the current content immediately`);
     await page.goto(`${origin}scripts/fixtures/post-reading.html?list`);
     await page.getByRole('button', { name: '临时展开', exact: true }).waitFor();
