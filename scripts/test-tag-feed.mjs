@@ -38,38 +38,34 @@ try {
     } catch (error) { report.failed.push({ name, error: String(error) }); await page.screenshot({ path: `${out}/${name}-failed.png` }); }
     finally { await context.close(); }
   };
-  const noMedia = async (page, requests) => { assert.equal(await page.locator("video,img").count(), 0); assert.equal(await count(page, "play"), 0); assert.deepEqual(await page.evaluate(() => window.tagFeedFixture.history), []); assert.deepEqual(requests, []); };
-  await run("pending-block-once-revision", "", async (page, requests) => {
+  const noMedia = async (page, requests) => { assert.equal(await page.locator("video,img").count(), 0); assert.equal(await count(page, "play"), 0); assert.deepEqual(await page.evaluate(() => window.tagFeedFixture.history), []); assert.deepEqual(requests.filter(url => decodeURIComponent(url).includes("/media/")), []); };
+  const skipped = page => page.getByText("当前列表没有可播放内容", { exact: true }).waitFor();
+  await run("pending-block-silently-skips", "", async (page, requests) => {
     await ready(page, "detail", 1); await noMedia(page, requests);
-    await complete(page, 1, ["science"]); await page.getByRole("button", { name: "本次查看", exact: true }).waitFor(); await noMedia(page, requests);
-    await page.getByRole("button", { name: "本次查看", exact: true }).click(); await ready(page, "play", 1); await page.locator("video").waitFor();
-    assert.deepEqual(await page.evaluate(() => window.tagFeedFixture.preferences.preferences.blockedTags), ["Science"]);
-    await page.evaluate(() => window.tagFeedFixture.preferences.blockTags(["Travel"])); await page.locator("[data-content-block-notice]").waitFor();
-    assert.equal(await page.locator("video,img").count(), 0, "Revision synchronously removes media and cover");
-    const history = await page.evaluate(() => window.tagFeedFixture.history);
-    await page.evaluate(() => window.tagFeedFixture.setMounted(false)); await paint(page);
-    assert.deepEqual(await page.evaluate(() => window.tagFeedFixture.history), history);
+    await complete(page, 1, ["science"]); await skipped(page); await noMedia(page, requests);
+    assert.equal(await page.locator("[data-content-block-notice]").count(), 0);
+    assert.equal(await page.getByRole("button", { name: "本次查看", exact: true }).count(), 0);
   });
-  await run("pause-and-resume-revokes-once", "", async page => {
-    await complete(page, 1, ["Science"]); await page.getByRole("button", { name: "本次查看", exact: true }).click(); await page.locator("video").waitFor();
+  await run("pause-and-resume-filtering", "", async page => {
+    await complete(page, 1, ["Science"]); await skipped(page);
     await page.evaluate(() => window.tagFeedFixture.preferences.setPaused(true)); await paint(page); assert.equal(await page.locator("video").count(), 1);
-    await page.evaluate(() => window.tagFeedFixture.preferences.setPaused(false)); await page.getByRole("button", { name: "本次查看", exact: true }).waitFor(); assert.equal(await page.locator("video").count(), 0);
+    await page.evaluate(() => window.tagFeedFixture.preferences.setPaused(false)); await skipped(page); assert.equal(await page.locator("video").count(), 0);
   });
   await run("detail-null-error-and-retry", "", async (page, requests) => {
-    await complete(page, 1, undefined, "", true); await page.getByRole("button", { name: "重试标签", exact: true }).waitFor(); await noMedia(page, requests);
-    await page.getByRole("button", { name: "重试标签", exact: true }).click(); await paint(page); await complete(page, 1, undefined, "标签服务暂时离线");
-    await page.getByText("标签服务暂时离线", { exact: true }).waitFor(); await noMedia(page, requests);
-    await page.getByRole("button", { name: "重试标签", exact: true }).click(); await paint(page); await complete(page, 1, ["Travel"]); await ready(page, "play", 1);
+    await complete(page, 1, undefined, "", true); await page.getByRole("button", { name: "重试", exact: true }).waitFor(); await noMedia(page, requests);
+    await page.getByRole("button", { name: "重试", exact: true }).click(); await paint(page); await complete(page, 1, undefined, "标签服务暂时离线");
+    await page.getByText("暂时无法加载内容", { exact: true }).waitFor(); await noMedia(page, requests);
+    await page.getByRole("button", { name: "重试", exact: true }).click(); await paint(page); await complete(page, 1, ["Travel"]); await ready(page, "play", 1);
   });
   await run("unknown-tags-retained", "", async page => { await complete(page, 1); await ready(page, "play", 1); await page.locator("video").waitFor(); });
-  await run("untagged-opt-in", "", async (page, requests) => { await complete(page, 1, []); await page.getByText("未提供标签", { exact: true }).waitFor(); await noMedia(page, requests); }, { blockedTags: [], paused: false, hideUntagged: true });
+  await run("untagged-opt-in-silent-skip", "", async (page, requests) => { await complete(page, 1, []); await skipped(page); await noMedia(page, requests); }, { blockedTags: [], paused: false, hideUntagged: true });
   await run("no-rules-preserves-eager-playback", "", async page => { await ready(page, "play", 1); await page.locator("video").waitFor(); assert.equal(await page.locator("[data-content-block-notice]").count(), 0); }, { blockedTags: [], paused: false, hideUntagged: false });
   await run("new-rule-removes-current-media", "auto=allow", async page => {
-    await page.locator("video").waitFor(); await page.evaluate(() => window.tagFeedFixture.preferences.blockTags(["Science"])); await page.getByRole("button", { name: "本次查看", exact: true }).waitFor(); assert.equal(await page.locator("video,img").count(), 0);
+    await page.locator("video").waitFor(); await page.evaluate(() => window.tagFeedFixture.preferences.blockTags(["Science"])); await skipped(page); assert.equal(await page.locator("video,img").count(), 0);
   }, { blockedTags: [], paused: false, hideUntagged: false });
   await run("home-skips-detail-match", "home=mixed", async (page, requests) => {
     await ready(page, "detail", 1); await noMedia(page, requests); await complete(page, 2, ["Travel"]); await complete(page, 1, ["Science"]);
-    await ready(page, "play", 2); assert.equal(await count(page, "play", 1), 0); assert(requests.every(url => !decodeURIComponent(url).includes("/cover/1") && !decodeURIComponent(url).includes("/media/1/")));
+    await ready(page, "play", 2); assert.equal(await count(page, "play", 1), 0); assert(requests.every(url => !decodeURIComponent(url).includes("/cover/1") && !decodeURIComponent(url).includes("/media/1/")), JSON.stringify(requests));
     assert.deepEqual(await page.evaluate(() => window.tagFeedFixture.history.map(item => item.id)), [2]);
   });
   for (const home of ["listed", "detail"]) await run(`home-bounded-${home}`, `home=${home}&auto=block`, async (page, requests) => {
@@ -78,18 +74,20 @@ try {
     await page.getByRole("button", { name: "继续加载", exact: true }).click(); await page.waitForFunction(() => window.tagFeedFixture.calls.filter(call => call.cmd === "feed").length === 6);
     await page.getByText("已达到本次自动补充上限，可继续加载。", { exact: true }).waitFor(); await paint(page); assert.equal(await count(page, "feed"), 6); await noMedia(page, requests);
   });
-  await run("id-anchor-and-once-leave", "ids=1,2,3&start=1", async page => {
+  await run("id-anchor-and-silent-skip", "ids=1,2,3&start=1", async page => {
     await complete(page, 1, ["Travel"]); await complete(page, 3, ["Travel"]); await complete(page, 2, ["Science"]);
-    await page.getByRole("button", { name: "本次查看", exact: true }).click(); await page.locator("video").waitFor();
+    await ready(page, "play", 3); await page.locator("video").waitFor();
+    assert.equal(await count(page, "play", 2), 0, "Blocked item is never requested for playback");
     const anchored = () => page.locator("video").evaluate(video => Math.abs(video.closest("section").getBoundingClientRect().top - document.querySelector(".player-root").getBoundingClientRect().top) < 1);
-    assert(await anchored()); await page.evaluate(() => window.tagFeedFixture.setIds([3, 2])); await paint(page); assert(await anchored()); assert.equal(await count(page, "play", 3), 0);
+    assert(await anchored()); await page.evaluate(() => window.tagFeedFixture.setIds([3, 2])); await paint(page); assert(await anchored());
+    assert.equal(await count(page, "play", 2), 0, "Blocked IDs stay out of playback after a list update");
     assert.equal(await page.evaluate(() => window.tagFeedFixture.nearEnd), 0, "Nonzero automatic anchoring never requests another page");
     await page.evaluate(() => window.tagFeedFixture.setIds([3])); await ready(page, "play", 3);
-    await page.evaluate(() => window.tagFeedFixture.setIds([2])); await page.getByRole("button", { name: "本次查看", exact: true }).waitFor(); assert.equal(await page.locator("video").count(), 0);
+    await page.evaluate(() => window.tagFeedFixture.setIds([2])); await skipped(page); assert.equal(await page.locator("video").count(), 0);
   });
-  await run("inactive-notice-is-inert", "", async page => {
+  await run("inactive-filter-has-no-notice", "", async page => {
     await complete(page, 1, ["Science"]); await page.evaluate(() => window.tagFeedFixture.setActive(false)); await paint(page);
-    assert(await page.locator("[data-content-block-notice]").evaluate(element => !!element.closest("[inert]")));
+    assert.equal(await page.locator("[data-content-block-notice]").count(), 0);
     assert.equal(await page.getByRole("button", { name: "本次查看", exact: true }).count(), 0);
   });
   await run("menu-full-capacity", "auto=allow", async page => {
@@ -107,7 +105,8 @@ try {
   await run("menu-final-capacity-slot", "auto=allow", async page => {
     await page.getByRole("button", { name: "不感兴趣", exact: true }).click(); await page.getByRole("button", { name: "Science", exact: true }).click();
     assert(await page.getByRole("button", { name: "Travel", exact: true }).isDisabled()); await page.getByRole("button", { name: "屏蔽所选标签", exact: true }).click();
-    await page.getByRole("button", { name: "本次查看", exact: true }).waitFor(); assert.equal(await page.evaluate(() => window.tagFeedFixture.preferences.preferences.blockedTags.length), 200);
+    await page.waitForFunction(() => window.tagFeedFixture.preferences.preferences.blockedTags.length === 200);
+    await skipped(page); assert.equal(await page.locator("[data-content-block-notice]").count(), 0);
   }, { blockedTags: Array.from({ length: 199 }, (_, i) => `Saved ${i}`), paused: false, hideUntagged: false });
   for (const mobile of [false, true]) for (const landscape of mobile ? [false, true] : [false]) {
     await run(`menu-geometry-${mobile ? "mobile" : "desktop"}-${landscape ? "landscape" : "portrait"}`, "auto=allow", async page => {
@@ -121,7 +120,7 @@ try {
       await trigger.click(); const dialog = page.getByRole("dialog", { name: "不感兴趣" }); await dialog.waitFor();
       assert.equal(await dialog.getByRole("button", { name: "science", exact: true }).count(), 0);
       await dialog.getByRole("button", { name: "Science", exact: true }).click(); await dialog.getByRole("button", { name: "屏蔽所选标签", exact: true }).click();
-      await page.getByRole("button", { name: "本次查看", exact: true }).waitFor(); assert.equal(await page.locator("video").count(), 0);
+      await skipped(page); assert.equal(await page.locator("video").count(), 0);
     }, { blockedTags: [], paused: false, hideUntagged: false }, mobile, landscape ? { width: 812, height: 375 } : undefined);
   }
 } catch (error) { report.failed.push({ name: "runner", error: String(error) }); }

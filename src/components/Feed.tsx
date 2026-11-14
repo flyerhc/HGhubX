@@ -15,7 +15,6 @@ import { copyText } from "../clipboard";
 import { tracePlayback } from "../playbackDiagnostics";
 import { createPlaybackClock } from "../playbackClock";
 import { useContentPreferences } from "../contentPreferences";
-import { ContentBlockNotice } from "./ContentBlockNotice";
 import { TagBlockMenu } from "./TagBlockMenu";
 import VideoDetailsPanel from "./VideoDetailsPanel";
 import {
@@ -51,25 +50,42 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const { preferences, revision, blockReason } = contentPreferences;
   const filtering = !preferences.paused && (preferences.blockedTags.length > 0 || preferences.hideUntagged);
   const [tagMenu, setTagMenu] = useState(false);
-  const [viewOnce, setViewOnce] = useState("");
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [tagErrors, setTagErrors] = useState<Record<string, string>>({});
+  const [details, setDetails] = useState<Record<number, Detail>>({});
+  const [posts, setPosts] = useState<Record<number, Post>>({});
+  const effectiveVideoIds = useMemo(
+    () => mode === "context" && filtering ? videoIds.filter(id => {
+      const key = `${accountScope}:${store.lineEpoch}:${kind}:${id}`;
+      if (!checked[key]) return true;
+      if (tagErrors[key]) return true;
+      return !blockReason(kind === "post" ? posts[id]?.tags : details[id]?.tags);
+    }) : videoIds,
+    [mode, filtering, revision, videoIds, accountScope, store.lineEpoch, kind, checked, tagErrors, posts, details, blockReason],
+  );
 
   const boxRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<VideoHandle>(null);
   const [position, setPosition] = useState(() => ({ id: videoIds[startIndex], index: startIndex }));
-  const anchoredIndex = videoIds.indexOf(position.id);
-  const index = anchoredIndex >= 0 ? anchoredIndex : Math.max(0, Math.min(position.index, videoIds.length - 1));
-  const idsRef = useRef(videoIds); idsRef.current = videoIds;
-  const setIndex = useCallback((next: number) => setPosition({ id: idsRef.current[next], index: next }), []);
+  const anchoredIndex = effectiveVideoIds.indexOf(position.id);
+  const sourcePosition = videoIds.indexOf(position.id);
+  const fallbackId = sourcePosition >= 0
+    ? effectiveVideoIds.find(id => videoIds.indexOf(id) > sourcePosition) ?? [...effectiveVideoIds].reverse().find(id => videoIds.indexOf(id) < sourcePosition)
+    : undefined;
+  const fallbackIndex = fallbackId === undefined ? -1 : effectiveVideoIds.indexOf(fallbackId);
+  const index = effectiveVideoIds.length === 0 ? -1 : anchoredIndex >= 0 ? anchoredIndex
+    : fallbackIndex >= 0 ? fallbackIndex : Math.max(0, Math.min(position.index, effectiveVideoIds.length - 1));
+  const idsRef = useRef(effectiveVideoIds); idsRef.current = effectiveVideoIds;
+  const setIndex = useCallback((next: number) => {
+    const id = idsRef.current[next];
+    if (id !== undefined) setPosition({ id, index: next });
+  }, []);
   const [renderIndex, setRenderIndex] = useState(startIndex);
   const [epMap, setEpMap] = useState<Record<number, number>>(() => (startEp ? { [videoIds[startIndex]]: startEp } : {}));
-  const [details, setDetails] = useState<Record<number, Detail>>({});
   const [playUrls, setPlayUrls] = useState<Record<string, string>>({});
   const [hevcUrls, setHevcUrls] = useState<Record<string, string>>({});
   const [proxyRetry, setProxyRetry] = useState(0);
   const [cards, setCards] = useState<Record<number, VideoCard>>({});
-  const [posts, setPosts] = useState<Record<number, Post>>({});
   const [related, setRelated] = useState<VideoCard[]>([]);
 
   const [time, setTime] = useState(0);
@@ -152,20 +168,18 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchRef = useRef<{ d0: number; mx0: number; my0: number; s0: number; x0: number; y0: number } | null>(null);
 
-  const curId = videoIds[index];
+  const curId = effectiveVideoIds[index];
   const detail = details[curId];
   const tagKey = `${accountScope}:${store.lineEpoch}:${kind}:${curId}`;
   const permissionKey = `${tagKey}:${revision}`;
   const currentTags = kind === "post" ? posts[curId]?.tags : detail?.tags;
   const tagsReady = !!checked[tagKey];
   const blocked = filtering && tagsReady ? blockReason(currentTags) : null;
-  const allowed = !filtering || (tagsReady && (!blocked || (mode !== "home" && viewOnce === permissionKey)));
+  const allowed = !filtering || (tagsReady && !blocked);
   const closePanels = () => { setPanel(null); setTagMenu(false); };
   const openPreferences = () => { closePanels(); store.push({ kind: "settings", section: "内容偏好" }); };
   const openTagMenu = () => { setPanel(null); setTagMenu(true); };
   const openTag = (tag: string) => { closePanels(); store.push({ kind: "tag", tag, name: tag }); };
-  const backFromBlock = () => onBack ? onBack() : store.setTab("category");
-  useEffect(() => { setViewOnce(""); }, [curId, revision, store.lineEpoch, accountScope]);
   useEffect(() => { setTagMenu(false); }, [curId, store.lineEpoch, accountScope]);
   useEffect(() => { if (blocked && mode === "home" && active) onBlocked?.(curId); }, [blocked, mode, active, curId, onBlocked]);
   useEffect(() => { if (!allowed) { setPanel(null); setTagMenu(false); } }, [allowed]);
@@ -261,7 +275,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       }
     : {
         title: detail?.title || cards[curId]?.title || "",
-        cover: detail?.cover || cards[curId]?.cover || "",
+        cover: detail?.cover?.trim() || "",
         desc: detail?.description || "",
         author: detail?.author?.name || "HGhubX",
         authorId: detail?.author?.id || -1,
@@ -311,8 +325,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   idxRef.current = index;
   const anchoredScroll = useRef<number | null>(null);
   useLayoutEffect(() => {
-    const id = videoIds[index];
-    if (position.id !== id || position.index !== index) {
+    const id = effectiveVideoIds[index];
+    if (id !== undefined && (position.id !== id || position.index !== index)) {
       setPosition({ id, index }); setRenderIndex(index);
     }
     // The scroll container is recreated after the tag gate/one-time prompt.
@@ -324,7 +338,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         boxRef.current.scrollTop = top;
       }
     }
-  }, [videoIds, index, position.id, position.index, allowed]);
+  }, [effectiveVideoIds, index, position.id, position.index, allowed]);
   const swipeTimer = useRef(0);
 
   const resolveSwipe = useCallback((target: number) => {
@@ -345,19 +359,19 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       if (Math.abs(el.scrollTop - top) <= 1) return;
     }
     const h = el.clientHeight || 1;
-    const i = Math.max(0, Math.min(videoIds.length - 1, Math.round(el.scrollTop / h)));
+    const i = Math.max(0, Math.min(effectiveVideoIds.length - 1, Math.round(el.scrollTop / h)));
     if (isDesktop) setRenderIndex(i);
-    if (onNearEnd && i >= videoIds.length - 3) onNearEnd();
+    if (onNearEnd && mode === "home" && i >= effectiveVideoIds.length - 3) onNearEnd();
     window.clearTimeout(swipeTimer.current);
     swipeTimer.current = window.setTimeout(() => resolveSwipe(i), 150);
-  }, [videoIds.length, onNearEnd, resolveSwipe, fs]);
+  }, [effectiveVideoIds.length, onNearEnd, resolveSwipe, fs, mode]);
 
   const go = useCallback((delta: number) => {
     const el = boxRef.current;
     if (!el) return;
-    const next = Math.max(0, Math.min(videoIds.length - 1, index + delta));
+    const next = Math.max(0, Math.min(effectiveVideoIds.length - 1, index + delta));
     el.scrollTo({ top: next * el.clientHeight, behavior: "smooth" });
-  }, [index, videoIds.length]);
+  }, [index, effectiveVideoIds.length]);
 
   /* 统一的上下切换：swipeEp 开启且为多集视频时优先切集，否则切剧。
      桌面端键盘 ↑↓ 与右侧按钮都走这里，和移动端上下划手势保持一致。 */
@@ -382,24 +396,27 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       if (dir === 1 ? (total === 0 || ep < total) : ep > 1) return true;
     }
     const next = index + dir;
-    return next >= 0 && next < videoIds.length;
+    return next >= 0 && next < effectiveVideoIds.length;
   };
 
   /* With filtering enabled, details are the gate: no media is requested before tags settle. */
   useEffect(() => {
     let alive = true;
     const epoch = store.lineEpoch;
-    const need = [videoIds[index], videoIds[index + 1], videoIds[index - 1]].filter(Boolean);
+    const need = [effectiveVideoIds[index], effectiveVideoIds[index + 1], effectiveVideoIds[index - 1]].filter((id): id is number => id !== undefined);
     need.forEach(id => {
       const key = `${accountScope}:${epoch}:${kind}:${id}`;
-      if (checked[key]) return;
-      setTagErrors(previous => ({ ...previous, [key]: "" }));
+      if (checked[key] || tagErrors[key]) return;
       const request = kind === "post" ? api.post(id) : api.video(id);
       request.then(value => {
         if (!alive || actionContext.current.accountScope !== accountScope || actionContext.current.lineEpoch !== epoch) return;
-        if (!value) throw new Error("标签详情为空，请重试");
+        if (!value) {
+          setTagErrors(previous => ({ ...previous, [key]: "标签暂不可用，请重试" }));
+          return;
+        }
         if (kind === "post") setPosts(previous => ({ ...previous, [id]: value as Post }));
         else setDetails(previous => ({ ...previous, [id]: value as Detail }));
+        setTagErrors(previous => { const next = { ...previous }; delete next[key]; return next; });
         setChecked(previous => ({ ...previous, [key]: true }));
       }).catch(error => {
         if (alive) setTagErrors(previous => ({ ...previous, [key]: error instanceof Error ? error.message : "标签暂不可用，请重试" }));
@@ -407,7 +424,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, index, videoIds, proxyRetry, store.lineEpoch, accountScope]);
+  }, [kind, index, effectiveVideoIds, proxyRetry, store.lineEpoch, accountScope, checked, tagErrors]);
 
   /* 相关推荐：切到当前视频时拉一次 */
   useEffect(() => {
@@ -782,7 +799,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     if (el && !isDesktop) {
       window.clearTimeout(swipeTimer.current);
       const h = el.clientHeight || 1;
-      const i = Math.max(0, Math.min(videoIds.length - 1, Math.round(el.scrollTop / h)));
+      const i = Math.max(0, Math.min(effectiveVideoIds.length - 1, Math.round(el.scrollTop / h)));
       if (i !== idxRef.current) resolveSwipe(i);
     }
     setClean(false);
@@ -797,7 +814,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         } catch { /* ignore */ }
       }
     }
-  }, [isDesktop, keepAlive, resolveSwipe, videoIds.length, setClean, setFs]);
+  }, [isDesktop, keepAlive, resolveSwipe, effectiveVideoIds.length, setClean, setFs]);
 
   const exitFs = useCallback(() => {
     setClean(false);
@@ -883,7 +900,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     el.addEventListener("touchmove", fn, { passive: false });
     return () => el.removeEventListener("touchmove", fn);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDesktop, videoIds.length]);
+  }, [isDesktop, effectiveVideoIds.length]);
 
   /* —— 进度条拖动（旋转舞台下按 Y 轴换算） —— */
   const barPctAt = (clientX: number, clientY: number) => {
@@ -993,6 +1010,10 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       && (detail.interaction.liked_ep === undefined || detail.interaction.liked_ep === curEp);
     return Math.max(0, base + Number(liked) - Number(!!loadedLiked));
   }, [meta.like, liked, kind, detail?.interaction, curEp]);
+  const collectCount = useMemo(() => {
+    const loadedCollected = kind === "video" && detail?.interaction?.collected;
+    return Math.max(0, meta.collect + Number(collected) - Number(!!loadedCollected));
+  }, [meta.collect, collected, kind, detail?.interaction]);
 
   const detailBody = (onClose?: () => void) => <VideoDetailsPanel meta={meta} videoId={curId} episodeCount={episodes.length}
     related={related} following={store.follows.includes(meta.authorId)} followPending={followPending}
@@ -1000,18 +1021,33 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     onAuthor={() => { if (meta.authorId > 0) { closePanels(); store.push({ kind: "user", id: meta.authorId, name: meta.author }); } }}
     onRelated={video => { closePanels(); store.push({ kind: "feed", videoIds: related.map(item => item.id), index: related.findIndex(item => item.id === video.id), title: "相关推荐" }); }} />;
 
-  if (curId && !allowed) {
-    const error = tagErrors[tagKey];
-    const pending = !tagsReady && !error;
-    return <div className="absolute inset-0" inert={!active || undefined} aria-hidden={!active || undefined}><ContentBlockNotice reason={pending ? "确认标签后才开始播放。" : error || blocked || "正在跳过屏蔽内容"}
-      busy={pending || (mode === "home" && !!blocked && !!onBlocked)}
-      onViewOnce={blocked && mode !== "home" ? () => setViewOnce(permissionKey) : undefined}
-      onRetry={error ? () => setProxyRetry(value => value + 1) : undefined}
-      onBack={backFromBlock} onSettings={openPreferences} /></div>;
+  if (curId && mode === "home" && blocked) {
+    return <div className="absolute inset-0 bg-black flex items-center justify-center" inert={!active || undefined} aria-hidden={!active || undefined}>
+      <Loader className="w-9 h-9 spinner" label="正在跳过内容" />
+    </div>;
   }
 
-  if (!videoIds.length) {
-    return <div className="absolute inset-0 bg-black flex items-center justify-center"><Loader className="w-9 h-9 spinner" /></div>;
+  if (curId && filtering && !tagsReady && !tagErrors[tagKey]) {
+    return <div className="absolute inset-0 bg-black flex items-center justify-center" inert={!active || undefined} aria-hidden={!active || undefined}>
+      <Loader className="w-9 h-9 spinner" label="正在加载内容" />
+    </div>;
+  }
+
+  if (curId && filtering && !tagsReady && tagErrors[tagKey]) {
+    return <div className="absolute inset-0 bg-black flex flex-col items-center justify-center gap-3" inert={!active || undefined} aria-hidden={!active || undefined}>
+      <span className="text-[13px] text-white/70">暂时无法加载内容</span>
+      <Button onClick={() => {
+        setTagErrors(previous => { const next = { ...previous }; delete next[tagKey]; return next; });
+        setProxyRetry(value => value + 1);
+      }} className="min-h-11 rounded-full bg-white/10 px-4 text-white">重试</Button>
+    </div>;
+  }
+
+  if (!effectiveVideoIds.length) {
+    return <div className="absolute inset-0 bg-black flex flex-col items-center justify-center gap-3" inert={!active || undefined} aria-hidden={!active || undefined}>
+      <span className="text-[14px] text-white/70">当前列表没有可播放内容</span>
+      {onBack && <Button onClick={onBack} className="min-h-11 rounded-full bg-white/10 px-5 text-white">返回</Button>}
+    </div>;
   }
 
   return (
@@ -1034,14 +1070,14 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       <div ref={boxRef} onScroll={onScroll}
         className={`absolute inset-y-0 left-0 no-bar ${fs ? "overflow-hidden" : "overflow-y-scroll snap-y snap-mandatory overscroll-y-contain"}`}
         style={{ right: isDesktop && panel ? 372 : 0, transition: "right .3s cubic-bezier(.2,0,0,1)" }}>
-        {videoIds.map((vid, i) => {
+        {effectiveVideoIds.map((vid, i) => {
           const isActive = i === index;
           const sectionClass = `${fs && !isActive ? "hidden" : "relative w-full h-full"} snap-start snap-always overflow-hidden`;
           // Preserve scroll/snap geometry without mounting distant posters and controls.
           if (isDesktop && Math.abs(i - index) > 1 && Math.abs(i - renderIndex) > 1) {
             return <section key={vid} className={sectionClass} aria-hidden="true" />;
           }
-          if (filtering && !isActive && (!checked[`${accountScope}:${store.lineEpoch}:${kind}:${vid}`] || blockReason(kind === "post" ? posts[vid]?.tags : details[vid]?.tags))) {
+          if (filtering && !isActive && (!checked[`${accountScope}:${store.lineEpoch}:${kind}:${vid}`] || tagErrors[`${accountScope}:${store.lineEpoch}:${kind}:${vid}`] || blockReason(kind === "post" ? posts[vid]?.tags : details[vid]?.tags))) {
             return <section key={vid} className={sectionClass} aria-hidden="true" />;
           }
           return (
@@ -1074,7 +1110,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 </div>
               ) : (
                 <div className="absolute inset-0">
-                  <Img src={details[vid]?.cover || cards[vid]?.cover || posts[vid]?.cover || ""} eager={Math.abs(i - index) <= 1} />
+                  {(!filtering || checked[`${accountScope}:${store.lineEpoch}:${kind}:${vid}`]) &&
+                    <Img src={details[vid]?.cover || cards[vid]?.cover || posts[vid]?.cover || ""} eager={Math.abs(i - index) <= 1} />}
                   <div className="absolute inset-0" style={{ background: "rgba(0,0,0,.25)" }} />
                 </div>
               )}
@@ -1096,7 +1133,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   <div className="desktop-context-header">
                     <Button onClick={onBack} aria-label="返回"><IBack size={17} /></Button>
                     <span>{title}</span>
-                    <small>{index + 1} / {videoIds.length}</small>
+                    <small>{index + 1} / {effectiveVideoIds.length}</small>
                   </div>
                 ) : (
                   <div className="absolute inset-x-0 z-20 flex items-center gap-2 px-2.5" style={{ top: "calc(var(--sat, 0px) + 8px)", paddingRight: 132 }}>
@@ -1108,7 +1145,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               {!fs && !clean && !isDesktop && mode === "context" && (
                 <span className="feed-position-pill absolute z-20 px-2.5 py-1 rounded-full hg-chip text-[12px] font-semibold tabular-nums"
                   style={{ top: "calc(var(--sat, 0px) + 52px)", left: 12, color: "rgba(255,255,255,.94)" }}>
-                  {index + 1} / {videoIds.length}
+                  {index + 1} / {effectiveVideoIds.length}
                 </span>
               )}
 
@@ -1185,8 +1222,16 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                       <span className="text-[12px] hg-ov-shadow" style={{ color: preferHevc ? "#fff" : undefined }}>{preferHevc ? "高清" : "标清"}</span>
                     </Button>
                   )}
+                  {kind === "video" && (
+                    <Button onClick={() => void onLike()} disabled={likePending} aria-busy={likePending} className="flex flex-col items-center gap-1 pressable" aria-pressed={liked} aria-label="点赞">
+                      {liked ? <IHeartF size={27} className="text-neon" /> : <IHeart size={27} className="hg-ink hg-ov-shadow" />}
+                      <span className="text-[12px] text-white/90 tabular-nums">{fmt(likeCount)}</span>
+                      <span className="text-[12px] hg-ink-2 hg-ov-shadow">点赞</span>
+                    </Button>
+                  )}
                   <Button onClick={() => void onFav()} disabled={collectPending} aria-busy={collectPending} className="flex flex-col items-center gap-1 pressable" aria-pressed={collected} aria-label="收藏">
                     {collected ? <IStarF size={27} className="hg-gold" /> : <IStar size={27} className="hg-ink hg-ov-shadow" />}
+                    <span className="text-[12px] text-white/90 tabular-nums">{fmt(collectCount)}</span>
                     <span className="text-[12px] hg-ink-2 hg-ov-shadow">收藏</span>
                   </Button>
                   <Button onClick={() => setPanel("comments")} className="flex flex-col items-center gap-1 pressable" aria-label="评论">
@@ -1214,7 +1259,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   <Button onClick={() => stepDir(1)} disabled={!canStep(1)} aria-label="下一个" title="下一个 ↓">
                     <IChevronDown size={19} strokeWidth={1.8} />
                   </Button>
-                  <small>{String(index + 1).padStart(2, "0")} / {String(videoIds.length).padStart(2, "0")}</small>
+                    <small>{String(index + 1).padStart(2, "0")} / {String(effectiveVideoIds.length).padStart(2, "0")}</small>
                 </div>
 
                 {kind === "video" && (
@@ -1375,7 +1420,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           visible={active && !idle}
           seekEnabled={active && !controlsLocked}
           seekKey={playKey}
-          nextDisabled={!episodes.some((e) => e.ep_num === curEp + 1) && index >= videoIds.length - 1}
+          nextDisabled={!episodes.some((e) => e.ep_num === curEp + 1) && index >= effectiveVideoIds.length - 1}
           nextTitle={episodes.some((e) => e.ep_num === curEp + 1) ? "下一集 E" : "下一部 ↓"}
           swipeEp={swipeEp}
           onToggleSwipe={() => { setSwipeEp(!swipeEp); toast(swipeEp ? "上下划切集已关闭" : "上下划切集已开启"); }}

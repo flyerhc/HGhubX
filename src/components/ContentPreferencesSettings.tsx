@@ -81,7 +81,7 @@ export default function ContentPreferencesSettings() {
     </div>}
     <details className="content-preference-help text-[12px] text-mut leading-relaxed">
       <summary className="min-h-11 flex items-center cursor-pointer text-[13px] text-on">屏蔽如何生效</summary>
-      <p>按完整标签匹配，忽略标签前后空格和英文大小写，命中任意一个标签即生效。首页跳过；搜索、分类、排行榜等列表默认隐藏，可临时展开；收藏和历史保留占位记录；直接打开时先提示，本次查看不取消屏蔽。</p>
+      <p>按完整标签匹配，忽略标签前后空格和英文大小写，命中任意一个标签即生效。首页和直接打开的内容会自动跳过；搜索、分类、排行榜等列表默认隐藏，可临时展开；收藏和历史保留占位记录。</p>
       <p className="mt-2">标签依赖内容提供方，缺失或不准确的标签可能影响结果。修改偏好不会删除收藏和观看记录。</p>
     </details>
     <Modal open={!!removal} onClose={() => setRemoval(null)} label={removal && "all" in removal ? "清空屏蔽标签" : "取消屏蔽标签"}>

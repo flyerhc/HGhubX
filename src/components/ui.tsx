@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { cover, platform } from "../api";
 export { Sheet, Modal, DockPanel } from "./ios/overlays";
 import { useStore } from "../store";
+import { Loader } from "./ios/effects";
 import { IBoltF, ICheck, IClose, IGlobe, IHeartF, IMinus, ISparkF, IStarF } from "../icons";
 
 /* ——— 头像 ——— */
@@ -150,8 +151,8 @@ export function CloseBtn({ onClick }: { onClick: () => void }) {
 }
 
 /* ——— 图片（骨架 + 渐显，自动走本地解密协议） ——— */
-export function Img({ src, alt = "", className = "", eager = false, raw = false }: {
-  src: string; alt?: string; className?: string; eager?: boolean; raw?: boolean;
+export function Img({ src, alt = "", className = "", eager = false, raw = false, loadingIndicator = false }: {
+  src: string; alt?: string; className?: string; eager?: boolean; raw?: boolean; loadingIndicator?: boolean;
 }) {
   const [ok, setOk] = useState(false);
   const [err, setErr] = useState(false);
@@ -165,11 +166,12 @@ export function Img({ src, alt = "", className = "", eager = false, raw = false 
   return (
     <div className={`ios-image absolute inset-0 overflow-hidden ${className}`} data-ui="image-frame">
       {!ok && !err && <div className="absolute inset-0 shimmer" />}
-      {err && <div className="ios-image-error" role="img" aria-label={alt || "封面暂不可用"}>HG</div>}
-      <Image src={retryUrl} alt={alt} loading={eager ? "eager" : "lazy"}
+      {loadingIndicator && !ok && <div className="absolute inset-0 grid place-items-center"><Loader label="封面加载中" /></div>}
+      {err && !loadingIndicator && <div className="ios-image-error" role="img" aria-label={alt || "封面暂不可用"}>HG</div>}
+      {url && <Image src={retryUrl} alt={alt} loading={eager ? "eager" : "lazy"}
         onLoad={() => { setOk(true); setErr(false); }}
-        onError={() => { if (raw) { setErr(true); return; } if (attempt < 2) setAttempt(attempt + 1); else setErr(true); }}
-        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${ok ? "opacity-100" : "opacity-0"}`} draggable={false} />
+        onError={() => { if (!raw && attempt < 2) setAttempt(attempt + 1); else setErr(true); }}
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${ok ? "opacity-100" : "opacity-0"}`} draggable={false} />}
     </div>
   );
 }

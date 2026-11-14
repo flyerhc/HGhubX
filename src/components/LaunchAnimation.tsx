@@ -15,7 +15,6 @@ export function LaunchAnimation({ onFinish }: { onFinish: () => void }) {
   const finishRef = useRef(onFinish);
   finishRef.current = onFinish;
   const complete = useRef(false);
-  const skipRef = useRef<HTMLButtonElement>(null);
   const finish = useCallback(() => {
     if (complete.current) return;
     complete.current = true;
@@ -29,8 +28,6 @@ export function LaunchAnimation({ onFinish }: { onFinish: () => void }) {
     const onHidden = () => { if (document.visibilityState === "hidden") finish(); };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); finish(); }
-      // Keep keyboard navigation on the only control while the application is not mounted.
-      if (event.key === "Tab") { event.preventDefault(); skipRef.current?.focus(); }
     };
     motion.addEventListener("change", onMotion);
     document.addEventListener("visibilitychange", onHidden);
@@ -57,7 +54,6 @@ export function LaunchAnimation({ onFinish }: { onFinish: () => void }) {
 
   return <div className="hg-launch" role="dialog" aria-modal="true" aria-label="HGhubX 启动动画"
     onAnimationEnd={event => { if (event.target === event.currentTarget && event.animationName === "launch-exit") finish(); }}>
-    <button ref={skipRef} type="button" className="hg-launch-skip" onClick={finish} aria-label="跳过启动动画">跳过 <span aria-hidden="true">↗</span></button>
     <div className="hg-launch-stage" aria-hidden="true">
       <div className="hg-launch-orbit" />
       <div className="hg-launch-mark">

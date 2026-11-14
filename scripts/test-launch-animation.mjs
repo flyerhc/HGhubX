@@ -67,13 +67,10 @@ try {
       assert.equal(await child(page).count(), 0, "Application/media children are not mounted during launch");
       assert.equal(await dialog(page).locator("svg").count(), 1, "Logo is a single code-rendered SVG");
       assert.equal(await dialog(page).locator("img, video, canvas").count(), 0, "No bitmap, video or canvas dependency");
-      const button = page.getByRole("button", { name: "跳过启动动画", exact: true });
-      const bounds = await button.boundingBox();
-      assert(bounds.width >= 44 && bounds.height >= 44, "Skip has a minimum 44px touch target");
-      assert(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width + 1 && bounds.y + bounds.height <= height + 1, "Skip fits viewport/safe area");
+      assert.equal(await dialog(page).getByRole("button").count(), 0, "Launch has no skip control");
       const geometry = await dialog(page).locator("svg").boundingBox();
       assert(geometry.x >= 0 && geometry.y >= 0 && geometry.x + geometry.width <= width + 1 && geometry.y + geometry.height <= height + 1, "Logo fits viewport");
-      report.measurements.push({ name, button: bounds, logo: geometry });
+      report.measurements.push({ name, logo: geometry });
       // Pause CSS at a composited mid-pose; JS completion timer remains separately controlled.
       await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 900; } });
       await page.screenshot({ path: `${output}/${name}.png` });
@@ -87,14 +84,7 @@ try {
     }, { width, height, theme });
   }
 
-  await run("skip-button-and-escape", async page => {
-    await dialog(page).waitFor();
-    await page.getByRole("button", { name: "跳过启动动画", exact: true }).click();
-    await paint(page);
-    await child(page).waitFor();
-    assert.equal(await dialog(page).count(), 0);
-    // A reload is a new application runtime and should show the intro again.
-    await page.reload();
+  await run("escape-finishes-launch", async page => {
     await dialog(page).waitFor();
     await page.keyboard.press("Escape");
     await paint(page);

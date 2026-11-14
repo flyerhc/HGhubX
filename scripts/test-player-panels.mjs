@@ -60,6 +60,39 @@ try {
     await page.getByRole("button",{name:"2",exact:true}).click();await ready("play",{ep:2});
     await page.getByText("第 2/30 集",{exact:true}).waitFor();
   });
+  await check("mobile feed shows like and favorite counts",async()=>{
+    const mobile=await browser.newPage({viewport:{width:390,height:844},userAgent:"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",isMobile:true,hasTouch:true,reducedMotion:"reduce"});
+    try {
+      await mobile.route("**/*",r=>new URL(r.request().url()).origin===new URL(origin).origin?r.continue():r.abort());
+      await mobile.goto(`${origin}tests/player-panels.html?page=feed`);await mobile.waitForFunction(()=>window.playerPanelFixture?.ready);await mobile.getByRole("button",{name:"不感兴趣",exact:true}).waitFor();
+      const rail=mobile.locator(".mobile-video-action-rail");
+      const like=rail.getByRole("button",{name:"点赞",exact:true}), favorite=rail.getByRole("button",{name:"收藏",exact:true});
+      await like.waitFor();await favorite.waitFor();
+      assert((await like.locator("span").allTextContents()).includes("1.2万"));
+      assert((await favorite.locator("span").allTextContents()).includes("6789"));
+      assert(await rail.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;}),"Action rail stays within mobile viewport");
+      assert(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),"No horizontal overflow on mobile");
+    } finally { await mobile.close(); }
+  });
+  await check("video details retain spinner when cover is unavailable",async()=>{
+    const requested=[];
+    await page.route("**/img?*",route=>{
+      const target=new URL(route.request().url()).searchParams.get("u")||"";
+      requested.push(target);
+      return route.fulfill({status:502,contentType:"text/plain",body:"fixture cover unavailable"});
+    });
+    await open("feed&cover-case");
+    await page.waitForFunction(()=>window.playerPanelFixture?.ready);
+    await page.getByRole("button",{name:"不感兴趣",exact:true}).waitFor();
+    await page.getByRole("button",{name:"视频详情",exact:true}).click();
+    const image=page.locator("[data-video-details] .video-details-cover img[data-ui=image]");
+    await image.waitFor();
+    await page.getByRole("status",{name:"封面加载中"}).waitFor();
+    await page.waitForFunction(()=>document.querySelectorAll("[data-video-details] .video-details-cover img").length===1);
+    assert(requested.length>=3,"Unavailable detail image gets the existing bounded retries");
+    assert(requested.every(url=>url.includes("detail-cover.jpg")),"No alternate cover source is requested");
+    assert.equal(await page.locator("[data-video-details] .video-details-cover [aria-label='封面加载中']").count(),1,"Loading indicator remains while no image has loaded");
+  });
   await check("episodes remain selected after sorting",async()=>{
     await open("episodes");await page.getByRole("button",{name:"2",exact:true}).click();
     assert.equal(await page.getByRole("button",{name:"2",exact:true}).getAttribute("aria-current"),"true");

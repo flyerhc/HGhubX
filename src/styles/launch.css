@@ -21,25 +21,6 @@
   --launch-muted: #566e76;
   --launch-bg: #eeefea;
 }
-.hg-launch-skip {
-  position: absolute;
-  top: max(env(safe-area-inset-top), 16px);
-  right: max(env(safe-area-inset-right), 20px);
-  min-height: 48px;
-  min-width: 76px;
-  padding: 0 16px;
-  border: 1px solid color-mix(in srgb, var(--launch-muted) 25%, transparent);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--launch-muted);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background-color 120ms, color 120ms;
-}
-.hg-launch-skip span { margin-left: 8px; }
-.hg-launch-skip:hover, .hg-launch-skip:active { background: color-mix(in srgb, var(--launch-muted) 12%, transparent); color: var(--launch-ink); }
-.hg-launch-skip:focus-visible { outline: 2px solid #60cdff; outline-offset: 4px; }
 .hg-launch-stage { position: relative; display: grid; justify-items: center; padding: 32px; transform: translateY(-8px); }
 .hg-launch-mark { position: relative; width: clamp(108px, 28vw, 152px); aspect-ratio: 1; }
 .hg-launch-svg { display: block; width: 100%; height: 100%; overflow: visible; }

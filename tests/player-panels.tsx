@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api } from "../src/api";
-import { AppProvider } from "../src/store";
+import { AppProvider, useStore } from "../src/store";
 import { ArticlePanel, CommentsPanel, EpisodesPanel } from "../src/components/Panels";
 import Feed from "../src/components/Feed";
 import "../src/index.css";
 type Pending = { cmd: string; args: Record<string, unknown>; resolve: (v: any) => void; reject: (v: unknown) => void };
 const pending: Pending[] = [];
+let store: ReturnType<typeof useStore>;
 const fixture = {
+  ready: false,
   calls: [] as { cmd: string; args: Record<string, unknown> }[], copied: [] as string[],
   setEp: (_ep: number) => {}, setActive: (_active: boolean) => {},
+  openFeed: () => {},
   complete(cmd: string, value: unknown, error = false, match: Record<string, unknown> = {}) {
     const i = pending.findIndex(r => r.cmd === cmd && Object.entries(match).every(([k,v]) => r.args[k] === v));
     if (i < 0) throw Error(`No pending ${cmd}`);
@@ -28,11 +31,14 @@ api.comments = (id, ep, page = 1) => request("comments", { id, ep, page });
 api.postComments = (id, page) => request("posts", { id, page });
 api.commentSend = (id, ep, text) => request("send", { id, ep, text });
 api.openUrl = async () => { throw Error("external handler unavailable"); };
-api.video = async () => ({ id: 991, title: "中性测试影片", description: "影片介绍。".repeat(100), cover: "", tags: [], score: 8, episode_count: 30, total_episodes: 30, episodes: Array.from({length:30}, (_,i) => ({ep_num:i+1,title:`第 ${i+1} 集`,duration:90,status:1})), counts:{like:0,collect:0,comment:0,hot:0},author:{id:1,name:"测试作者"},is_finished:true,is_original:0 });
+api.video = async () => ({ id: 991, title: "中性测试影片", description: "影片介绍。".repeat(100), cover: new URLSearchParams(location.search).has("cover-case") ? "https://fixture.invalid/detail-cover.jpg" : "", tags: [], score: 8, episode_count: 30, total_episodes: 30, episodes: Array.from({length:30}, (_,i) => ({ep_num:i+1,title:`第 ${i+1} 集`,duration:90,status:1})), counts:{like:12345,collect:6789,comment:0,hot:0},author:{id:1,name:"测试作者"},is_finished:true,is_original:0 });
 api.play = async (id, ep) => { fixture.calls.push({ cmd: "play", args: { id, ep } }); return { id, ep_num: ep, title: "测试", duration: 90, video_url: "" }; };
 function Harness() {
   const [ep, setEp] = useState(1), [active, setActive] = useState(true);
   fixture.setEp = setEp; fixture.setActive = setActive;
+  store = useStore();
+  fixture.ready = true;
+  fixture.openFeed = () => { store.push({ kind: "feed", videoIds: [991], index: 0, title: "卡片封面回退", source: "fixture" }); };
   return <><div className="plat-ios" style={{ position: "relative", width: "100%", height: "min(72vh, 620px)" }}>
     {params.get("page") === "episodes" ? <EpisodesPanel videoId={991} episodes={Array.from({length:30}, (_,i) => ({ep_num:i+1,title:`第 ${i+1} 集`,duration:90,status:1}))} current={ep} onPick={setEp} onClose={() => {}} />
       : params.get("page") === "article" ? <ArticlePanel title="详情测试" html={`${"<p>正文内容用于验证独立滚动。</p>".repeat(40)}<a href="https://example.com/article">正文链接</a>`} onClose={() => {}} />

@@ -12,7 +12,6 @@ import { IBack, IFireF, IPlayF, ISearch } from "../icons";
 import { handleArticleClick, sanitizeHtml } from "../html";
 import { InplaceSearch } from "../components/InplaceSearch";
 import { FilteredContent } from "../components/FilteredContent";
-import { ContentBlockNotice } from "../components/ContentBlockNotice";
 import { TagBlockMenu } from "../components/TagBlockMenu";
 import { useContentPreferences } from "../contentPreferences";
 
@@ -112,17 +111,26 @@ const HIDDEN_POST_TAG = "\u9ec4\u679c";
 /* ================= 吃瓜详情（网页式浏览） ================= */
 export function PostDetail({ id, onBack, active = true }: { id: number; onBack: () => void; active?: boolean }) {
   const { toast, strictSecurity, muted, setMuted, push } = useStore();
-  const { preferences, revision, blockReason } = useContentPreferences();
+  const { preferences, blockReason } = useContentPreferences();
   const filtering = !preferences.paused && (preferences.blockedTags.length > 0 || preferences.hideUntagged);
   const [post, setPost] = useState<(Post & { content?: string; video_url?: string }) | null>(null);
   const [loadedId, setLoadedId] = useState<number | null>(null);
-  const [viewOnce, setViewOnce] = useState("");
+  const autoBackKey = useRef("");
   const [tagMenu, setTagMenu] = useState(false);
   useEffect(() => { if (!active) setTagMenu(false); }, [active]);
   const currentPost = loadedId === id ? post : null;
-  const blocked = currentPost ? blockReason(currentPost.tags) : null;
-  const bypassKey = `${id}:${revision}`;
-  const allowed = !filtering || (!!currentPost && (!blocked || viewOnce === bypassKey));
+  const blocked = filtering && currentPost ? blockReason(currentPost.tags) : null;
+  const allowed = !filtering || (!!currentPost && !blocked);
+  useEffect(() => {
+    if (!active || !filtering || !currentPost || !blocked) {
+      if (!blocked) autoBackKey.current = "";
+      return;
+    }
+    const key = String(id);
+    if (autoBackKey.current === key) return;
+    autoBackKey.current = key;
+    onBack();
+  }, [active, filtering, currentPost, blocked, id, onBack]);
   useEffect(() => { if (!allowed) setTagMenu(false); }, [allowed]);
   const [err, setErr] = useState<string | null>(null);
   const [play, setPlay] = useState(false);
@@ -151,7 +159,6 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
     scrollRef.current?.scrollTo(0, 0);
     setPost(null);
     setLoadedId(null);
-    setViewOnce("");
     setTagMenu(false);
     setErr(null);
     setPlay(false);
@@ -184,10 +191,10 @@ export function PostDetail({ id, onBack, active = true }: { id: number; onBack: 
     return () => { alive = false; };
   }, [id, reload, mediaRetry, allowed]);
 
-  // Guard the whole surface: no poster, article HTML or media element is mounted while blocked.
-  if (currentPost && blocked && viewOnce !== bypassKey) return <ContentBlockNotice
-    reason={blocked} onViewOnce={() => setViewOnce(bypassKey)} onBack={onBack}
-    onSettings={() => push({ kind: "settings", section: "内容偏好" })} />;
+  // Keep blocked content out of the surface while the host navigates back.
+  if (currentPost && blocked) return <div className="absolute inset-0 flex items-center justify-center bg-bg" aria-label="正在返回">
+    <Loader className="w-8 h-8 spinner" />
+  </div>;
 
   return (
     <div className="ios-page absolute inset-0 bg-bg flex flex-col">
