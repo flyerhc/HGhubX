@@ -1056,15 +1056,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     setBarPct(null);
   };
 
-  const togglePip = async () => {
-    try {
-      const v = videoRef.current?.el();
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else if (v && document.pictureInPictureEnabled) await v.requestPictureInPicture();
-      else toast("当前环境不支持画中画", "info");
-    } catch { toast("画中画开启失败", "info"); }
-  };
-
   const actionIsCurrent = () => mounted.current && actionContext.current.accountScope === accountScope && actionContext.current.lineEpoch === store.lineEpoch
     && actionContext.current.id === curId && actionContext.current.ep === curEp && actionContext.current.kind === kind;
 
