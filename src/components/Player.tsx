@@ -114,15 +114,10 @@ export default function Player({
         setErrMsg("");
       });
       hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (!data.fatal) {
-          if (
-            data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
-            data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR
-          ) {
-            try { hls.startLoad(video.currentTime || -1); } catch { /* ignore */ }
-          }
-          return;
-        }
+        // Leave non-fatal fragment and buffer errors to hls.js. Its internal
+        // retry policy is bounded; restarting the loader here defeats that
+        // backoff and can create thousands of requests during an outage.
+        if (!data.fatal) return;
         if (!activity.isActive()) return;
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR && recoverCountRef.current < 4) {
           recoverCountRef.current += 1;
@@ -137,10 +132,9 @@ export default function Player({
         const detail = `${data.type}/${data.details}/${data.response?.code ?? ""}/${String(data.reason ?? "").slice(0, 80)}`;
         (window as unknown as { __hlsErr?: string }).__hlsErr = detail;
         setErrMsg(detail);
-        if (!activity.isActive()) return;
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else { hls.destroy(); hlsRef.current = null; }
+        if (data.type !== Hls.ErrorTypes.NETWORK_ERROR && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
+          hls.destroy(); hlsRef.current = null;
+        }
       });
     } else {
       // Safari / 部分 WebView 原生支持 HLS
