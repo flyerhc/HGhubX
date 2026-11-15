@@ -10,6 +10,7 @@ use aes::Aes128;
 use once_cell::sync::Lazy;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex, Weak};
 use tauri::http::{Response, StatusCode};
 
@@ -45,6 +46,12 @@ static KEY_CACHE: Lazy<Mutex<HashMap<String, (String, Arc<Vec<u8>>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static SEG_CACHE: Lazy<Mutex<HashMap<String, (String, Arc<Vec<u8>>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+type SegmentResult = Result<(Option<String>, Arc<Vec<u8>>), String>;
+type SegmentLoad = tokio::sync::OnceCell<SegmentResult>;
+// hls.js can issue the same segment concurrently (ABR probes, seek re-entry).
+// Share the in-progress download, but never across a proxy/security generation.
+static SEG_LOADING: Lazy<Mutex<HashMap<String, Weak<SegmentLoad>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 const IMG_CACHE_MAX: usize = 240;
 const PL_CACHE_MAX: usize = 60;
@@ -60,6 +67,45 @@ fn cache_put<V: Clone>(map: &Mutex<HashMap<String, V>>, key: String, val: V, max
         }
     }
     m.insert(key, val);
+}
+
+/// Run one in-progress request per key. Every waiter clones the same result,
+/// including an error. Failed cells are removed immediately so a later request
+/// can retry instead of inheriting a short-lived failed flight.
+async fn coalesce<T, F, Fut>(
+    registry: &Mutex<HashMap<String, Weak<tokio::sync::OnceCell<Result<T, String>>>>>,
+    key: String,
+    fetch: F,
+) -> Result<T, String>
+where
+    T: Clone,
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T, String>>,
+{
+    let load = {
+        let mut requests = registry.lock().unwrap();
+        requests.retain(|_, request| request.strong_count() > 0);
+        if let Some(load) = requests.get(&key).and_then(Weak::upgrade) {
+            load
+        } else {
+            let load = Arc::new(tokio::sync::OnceCell::new());
+            requests.insert(key.clone(), Arc::downgrade(&load));
+            load
+        }
+    };
+    let result = load.get_or_init(fetch).await.clone();
+    if result.is_err() {
+        if let Ok(mut requests) = registry.lock() {
+            if requests
+                .get(&key)
+                .and_then(Weak::upgrade)
+                .is_some_and(|request| Arc::ptr_eq(&request, &load))
+            {
+                requests.remove(&key);
+            }
+        }
+    }
+    result
 }
 
 /* ───────────────────────── AES ───────────────────────── */
@@ -306,7 +352,24 @@ fn absolutize_uri_in_attr(base: &str, line: &str) -> String {
 }
 
 /// 分片 / AES Key 带内存缓存：拖动进度条时避免重复拉取同一片造成卡顿。
-pub async fn load_segment(url: &str) -> Result<(Option<String>, Arc<Vec<u8>>), String> {
+pub async fn load_segment(url: &str) -> SegmentResult {
+    if let Some((ctype, hit)) = KEY_CACHE.lock().unwrap().get(url).cloned() {
+        return Ok((Some(ctype), hit));
+    }
+    if let Some((ctype, hit)) = SEG_CACHE.lock().unwrap().get(url).cloned() {
+        return Ok((Some(ctype), hit));
+    }
+    let key = segment_flight_key(crate::net::request_scope(), url);
+    coalesce(&SEG_LOADING, key, || download_segment(url)).await
+}
+
+fn segment_flight_key(scope: crate::net::RequestScope, url: &str) -> String {
+    format!("{}:{}:{url}", u8::from(scope.strict), scope.generation)
+}
+
+async fn download_segment(url: &str) -> SegmentResult {
+    // Another request may have populated the completed cache while this one
+    // was waiting for the single-flight lock.
     if let Some((ctype, hit)) = KEY_CACHE.lock().unwrap().get(url).cloned() {
         return Ok((Some(ctype), hit));
     }
@@ -519,6 +582,70 @@ pub async fn handle(path: &str, query: &str, origin: &str, range: Option<&str>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[tokio::test]
+    async fn concurrent_segment_flights_share_one_download() {
+        let registry: Mutex<HashMap<String, Weak<tokio::sync::OnceCell<Result<u64, String>>>>> =
+            Mutex::new(HashMap::new());
+        let calls = AtomicUsize::new(0);
+        let (first, second) = tokio::join!(
+            coalesce(&registry, "same-segment".into(), || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Ok(42)
+            }),
+            coalesce(&registry, "same-segment".into(), || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(99)
+            })
+        );
+        assert_eq!(first, Ok(42));
+        assert_eq!(second, Ok(42));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn segment_flight_failure_reaches_every_waiter_and_allows_retry() {
+        let registry: Mutex<HashMap<String, Weak<tokio::sync::OnceCell<Result<u64, String>>>>> =
+            Mutex::new(HashMap::new());
+        let (first, second) = tokio::join!(
+            coalesce(&registry, "failed-segment".into(), || async {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Err("upstream failed".to_string())
+            }),
+            coalesce(&registry, "failed-segment".into(), || async {
+                Ok(1)
+            })
+        );
+        assert_eq!(first, Err("upstream failed".to_string()));
+        assert_eq!(second, Err("upstream failed".to_string()));
+
+        let retry = coalesce(&registry, "failed-segment".into(), || async { Ok(7) }).await;
+        assert_eq!(retry, Ok(7));
+    }
+
+    #[test]
+    fn segment_flights_do_not_cross_security_or_proxy_generations() {
+        let base = crate::net::RequestScope {
+            strict: true,
+            generation: 11,
+        };
+        let key = segment_flight_key(base, "https://cdn.example/seg.ts");
+        assert_eq!(key, segment_flight_key(base, "https://cdn.example/seg.ts"));
+        assert_ne!(
+            key,
+            segment_flight_key(crate::net::RequestScope { strict: false, ..base }, "https://cdn.example/seg.ts")
+        );
+        assert_ne!(
+            key,
+            segment_flight_key(crate::net::RequestScope { generation: 12, ..base }, "https://cdn.example/seg.ts")
+        );
+        assert_ne!(
+            key,
+            segment_flight_key(base, "https://cdn.example/other.ts")
+        );
+    }
 
     #[test]
     fn native_range_probe_returns_only_requested_playlist_bytes() {
