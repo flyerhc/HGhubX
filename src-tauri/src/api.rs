@@ -779,10 +779,13 @@ pub async fn api_topics(state: State<'_, Api>) -> Result<Value, String> {
 }
 
 /// 专题详情：`/api/topics/{slug}` 返回 data = { topic, videos, related }。
+/// `videos` 是分页对象；专题可能有上百部，不能只读第一页。
 #[tauri::command]
-pub async fn api_topic(state: State<'_, Api>, slug: String) -> Result<Value, String> {
+pub async fn api_topic(state: State<'_, Api>, slug: String, page: u32, size: u32) -> Result<Value, String> {
     let encoded: String = url::form_urlencoded::byte_serialize(slug.as_bytes()).collect();
-    state.get(&format!("/api/topics/{encoded}")).await
+    let page = page.max(1);
+    let size = size.clamp(1, 100);
+    state.get(&format!("/api/topics/{encoded}?page={page}&size={size}")).await
 }
 
 /// 标签分组：`/api/tags` 返回 data.categories[]，每个含 tags[]（name/slug/hot_score）。
