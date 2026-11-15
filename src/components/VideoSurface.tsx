@@ -159,15 +159,11 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       });
       hls.on(Hls.Events.FRAG_BUFFERED, () => { recoverCountRef.current = 0; });
       hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (!data.fatal) {
-          if (
-            data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
-            data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR
-          ) {
-            try { hls.startLoad(video.currentTime || -1); } catch { /* ignore */ }
-          }
-          return;
-        }
+        // hls.js already retries recoverable fragment errors and reports buffer
+        // stalls while its loader is still active. Calling startLoad() for every
+        // such event bypasses that backoff and turns a transient outage into a
+        // request storm.
+        if (!data.fatal) return;
         if (!activity.isActive()) return;
         const retry = () => {
           recoverCountRef.current += 1;
@@ -183,9 +179,9 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR && recoverCountRef.current < 4) { retry(); return; }
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR && recoverCountRef.current < 4) { retry(); return; }
         onError?.(`${data.type}/${data.details}`);
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else { hls.destroy(); hlsRef.current = null; }
+        if (data.type !== Hls.ErrorTypes.NETWORK_ERROR && data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
+          hls.destroy(); hlsRef.current = null;
+        }
       });
     } else {
       video.src = url;

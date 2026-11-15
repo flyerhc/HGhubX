@@ -262,15 +262,18 @@ async function stallCheck(page) {
   await loadPlayer(page);
   await page.waitForFunction(() => { const v = document.querySelector("video"); return v.buffered.length && v.buffered.end(0) >= 30; });
   await page.evaluate(async () => { await window.playerSeekFixture.setLogging(true); window.playerSeekFixture.pauseBuffering(); });
-  await page.route("**/seg?*", route => route.abort("failed"));
+  let segmentAttempts = 0;
+  await page.route("**/seg?*", route => { segmentAttempts += 1; return route.abort("failed"); });
   await clickProgress(page, .8);
   const logs = await waitLog(page, "seek.timeout");
   const timeout = logs.find(e => e.event === "seek.timeout");
   assert(timeout.data.ready < 3 && timeout.data.seeking, "Timeout must capture the stalled media state");
+  await page.waitForTimeout(250);
+  assert(segmentAttempts < 80, `Recoverable fragment failures must not fan out into a retry storm (${segmentAttempts} attempts)`);
   await page.unroute("**/seg?*");
   await page.evaluate(() => window.playerSeekFixture.resumeBuffering());
   await waitLog(page, "seek.resumed");
-  return { fault_injected: true, timeout_ms: timeout.data.elapsed_ms };
+  return { fault_injected: true, timeout_ms: timeout.data.elapsed_ms, segment_attempts: segmentAttempts };
 }
 async function managedMediaCheck(page) {
   // Chromium supplies real MSE decoding/buffering; only the MMS constructor and streaming
