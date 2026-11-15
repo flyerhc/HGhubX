@@ -57,7 +57,7 @@ try {
       HTMLMediaElement.prototype.play = function () {
         window.postControlsMedia.play++;
         paused.set(this, false);
-        this.dispatchEvent(new Event("play")); this.dispatchEvent(new Event("playing"));
+        queueMicrotask(() => { if (!paused.get(this)) { this.dispatchEvent(new Event("play")); this.dispatchEvent(new Event("playing")); } });
         return Promise.resolve();
       };
       HTMLMediaElement.prototype.pause = function () {
