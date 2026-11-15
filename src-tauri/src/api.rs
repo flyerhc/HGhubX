@@ -1028,9 +1028,11 @@ pub async fn api_follow(state: State<'_, Api>, uid: i64, on: bool, expected_user
 /* ───────────────────────── 本地缓存 ───────────────────────── */
 
 #[tauri::command]
-pub async fn cache_clear() -> Result<(), String> {
+pub async fn cache_clear(
+    webview: tauri::Webview,
+) -> Result<crate::cache::CacheClearReport, String> {
     crate::media::clear_caches();
-    Ok(())
+    crate::cache::clear_web_cache(&webview).await
 }
 
 /* ───────────────────────── 吃瓜帖子互动 ───────────────────────── */

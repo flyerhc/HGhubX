@@ -441,8 +441,9 @@ fn segment_response(
                 200,
                 "application/vnd.apple.mpegurl",
                 rewrite_playlist(target, text, origin).into_bytes(),
-                // Rewriting nested URIs does not require disabling the upstream cache policy.
-                "public, max-age=3600",
+                // The bounded Rust-side caches provide seeks; duplicating media in
+                // WebKit's durable HTTP cache caused WebKitCache to grow unbounded.
+                "no-store",
             ),
             Err(_) => respond(
                 502,
@@ -456,7 +457,7 @@ fn segment_response(
         200,
         ctype.unwrap_or("application/octet-stream"),
         bytes,
-        "public, max-age=3600",
+        "no-store",
     )
 }
 
@@ -489,7 +490,9 @@ pub async fn handle(path: &str, query: &str, origin: &str, range: Option<&str>) 
     let response = match path {
         "/img" => match load_image(&target).await {
             Ok((kind, bytes)) => {
-                respond(200, &kind, bytes.as_ref().clone(), "public, max-age=86400")
+                // IMG_CACHE is bounded and already deduplicates repeated covers;
+                // do not duplicate them into WebKit's disk cache indefinitely.
+                respond(200, &kind, bytes.as_ref().clone(), "no-store")
             }
             Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
         },
@@ -605,6 +608,7 @@ mod tests {
             "application/vnd.apple.mpegurl"
         );
         assert_eq!(response.headers()["X-Content-Type-Options"], "nosniff");
+        assert_eq!(response.headers()["Cache-Control"], "no-store");
         assert!(!response
             .headers()
             .contains_key("Access-Control-Allow-Origin"));
@@ -619,6 +623,24 @@ mod tests {
             LOCAL_ORIGIN,
         );
         assert!(bom.body().starts_with(b"#EXTM3U\n"));
+    }
+
+    #[test]
+    fn proxied_media_is_not_written_to_the_webview_disk_cache() {
+        let segment = segment_response(
+            "https://cdn.example/seg-1.ts",
+            Some("video/mp2t"),
+            b"segment-bytes".to_vec(),
+            LOCAL_ORIGIN,
+        );
+        assert_eq!(segment.headers()["Cache-Control"], "no-store");
+        let playlist = segment_response(
+            "https://cdn.example/list.m3u8",
+            None,
+            b"#EXTM3U\nseg-1.ts\n".to_vec(),
+            LOCAL_ORIGIN,
+        );
+        assert_eq!(playlist.headers()["Cache-Control"], "no-store");
     }
 
     /// 联网测试：默认跳过，手动跑 `cargo test --lib -- --ignored`。
