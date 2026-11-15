@@ -52,6 +52,8 @@ export type PageInput =
   | { kind: "following" }
   | { kind: "user"; id: number; name?: string };
 
+export type SuperResMode = "off" | "natural" | "cinema" | "crisp" | "anime_3d" | "anime_2d";
+
 export type Toast = {
   id: number;
   msg: string;
@@ -72,12 +74,14 @@ type Persist = GuestData & {
   swipeEp: boolean;
   /** 优先高清：有 HEVC 就用 HEVC，播不了自动回退标准 */
   preferHevc: boolean;
+  /** GPU 超分档位。和 HEVC 开关分开，关闭时不改画面。 */
+  srMode: SuperResMode;
 };
 
 const LS = STORAGE_KEYS.app;
 const DEFAULTS: Persist = {
   likes: [], favs: [], history: [], follows: [],
-  muted: true, muteOnStartup: true, volume: 0.7, searchHist: [], swipeEp: true, preferHevc: false,
+  muted: true, muteOnStartup: true, volume: 0.7, searchHist: [], swipeEp: true, preferHevc: false, srMode: "off",
 };
 
 /** 旧版本 history 是 number[]，读出来时升级成带进度的结构 */
@@ -114,7 +118,9 @@ function loadPersist(): Persist {
         localStorage.setItem(STORAGE_KEYS.swipeEp, "1");
       }
     } catch { /* ignore */ }
-    return { ...p, swipeEp, muteOnStartup, muted: muteOnStartup || p.muted === true, history: normalizeHistory(p.history) };
+    const known: SuperResMode[] = ["off", "natural", "cinema", "crisp", "anime_3d", "anime_2d"];
+    const srMode = known.includes(p.srMode) ? p.srMode : "off";
+    return { ...p, swipeEp, muteOnStartup, muted: muteOnStartup || p.muted === true, srMode, history: normalizeHistory(p.history) };
   } catch {
     return DEFAULTS;
   }
@@ -184,6 +190,7 @@ type Store = {
   muteOnStartup: boolean; setMuteOnStartup: (on: boolean) => void;
   swipeEp: boolean; setSwipeEp: (on: boolean) => void;
   preferHevc: boolean; setPreferHevc: (on: boolean) => void;
+  srMode: SuperResMode; setSrMode: (mode: SuperResMode) => void;
   volume: number; setVolume: (v: number) => void;
   searchHist: string[]; addSearch: (q: string) => void; clearSearchHist: () => void;
   strictSecurity: boolean; strictSecurityReady: boolean; securityPending: boolean; cliRelaxed: boolean; setStrictSecurity: (on: boolean) => Promise<void>;
@@ -390,6 +397,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setPreferHevc = useCallback((on: boolean) => {
     setP((s) => ({ ...s, preferHevc: on }));
   }, []);
+  const setSrMode = useCallback((mode: SuperResMode) => {
+    setP((s) => (s.srMode === mode ? s : { ...s, srMode: mode }));
+  }, []);
   const setVolume = useCallback((v: number) => {
     const volume = Math.max(0, Math.min(1, v));
     setP((s) => ({ ...s, volume, muted: volume === 0 }));
@@ -410,12 +420,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     muteOnStartup: p.muteOnStartup, setMuteOnStartup,
     swipeEp: p.swipeEp, setSwipeEp,
     preferHevc: p.preferHevc, setPreferHevc,
+    srMode: p.srMode, setSrMode,
     searchHist: p.searchHist, addSearch, clearSearchHist,
     strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast, lineEpoch,
   }), [theme, themePreference, setTheme, tab, setTab, stack, push, pop, user, loginOpen, logout,
     p, account,
-    setMuted, setMuteOnStartup, setSwipeEp, setPreferHevc, setVolume, addSearch, clearSearchHist, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
+    setMuted, setMuteOnStartup, setSwipeEp, setPreferHevc, setSrMode, setVolume, addSearch, clearSearchHist, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast, lineEpoch, theater, setTheater, fs, setFs, clean, setClean]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
