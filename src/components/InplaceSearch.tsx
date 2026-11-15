@@ -1,6 +1,6 @@
 import { Button, Form, Input } from "./ios/controls";
 import { Loader } from "./ios/effects";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fmt } from "../api";
 import type { Post, VideoCard } from "../types";
 import { MediaCard, Masonry } from "./cards";
@@ -8,6 +8,7 @@ import { FilteredContent } from "./FilteredContent";
 import { Empty } from "./ui";
 import { IBack, IClose, ISearch } from "../icons";
 import { useSearchResults } from "../useSearchResults";
+import { registerOverlayBack } from "../back";
 
 /** 栏目内搜索保持自身范围；与全局搜索共用请求、缓存和失败恢复逻辑。 */
 export function InplaceSearch({ kind, postLabel = "吃瓜帖", scope, onOpenVideo, onOpenPost, onClose, wide }: {
@@ -22,6 +23,9 @@ export function InplaceSearch({ kind, postLabel = "吃瓜帖", scope, onOpenVide
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const results = useSearchResults(scope);
   const { result, request, loading, error } = results;
   const items = result?.kind === "video" ? result.items as VideoCard[] : [];
@@ -36,8 +40,17 @@ export function InplaceSearch({ kind, postLabel = "吃瓜帖", scope, onOpenVide
     results.search(trimmed, kind);
   };
 
+  useEffect(() => registerOverlayBack(() => {
+    const root = rootRef.current;
+    // Stack pages stay mounted under the next page. A hidden search must not consume
+    // the hardware back event that belongs to the page currently on top.
+    if (!root || root.closest("[inert]")) return false;
+    closeRef.current();
+    return true;
+  }), []);
+
   return (
-    <div className="ios-page absolute inset-0 z-20 bg-bg flex flex-col">
+    <div ref={rootRef} className="ios-page absolute inset-0 z-20 bg-bg flex flex-col">
       <div className="shrink-0 px-4 pb-3 flex items-center gap-2.5 bg-s1" style={{ paddingTop: "calc(var(--sat, 0px) + 12px)" }}>
         <Button onClick={onClose} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable" aria-label="退出搜索"><IBack size={19} /></Button>
         <Form className="flex-1 min-w-0 flex items-center gap-2 h-11 rounded-(--r-ctl) bg-s3 px-3.5 focus-within:bg-s4 transition-colors"
