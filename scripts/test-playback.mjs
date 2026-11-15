@@ -85,9 +85,9 @@ async function wakePlaybackControls(page, legacy) {
   const bounds = await root.boundingBox(); assert(bounds, `${legacy ? "Legacy" : "Feed"} player missing`);
   const control = page.getByRole("button", { name: "暂停", exact: true });
   const button = await control.boundingBox(); assert(button, "Pause control missing");
-  // Hover the player surface first, then confirm the real control receives
-  // hit tests before asking Playwright to click it normally.
+  // Enter the player first, then move onto the hover-revealed control itself.
   await root.hover({ position: { x: bounds.width / 2, y: bounds.height / 2 } });
+  await page.mouse.move(button.x + button.width / 2, button.y + button.height / 2);
   await page.waitForFunction(({ x, y, legacy }) => {
     const root = document.querySelector(legacy ? ".post-player" : ".player-root");
     const controls = root?.querySelector(legacy ? ".player-inline-controls" : ".desktop-controls");
