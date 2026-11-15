@@ -1,6 +1,9 @@
 import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "react";
 import Hls from "hls.js";
 import { isLocalMedia, platform, playlist } from "../api";
+import { holdLevelCeiling } from "../stableLevel";
+import SuperResCanvas, { getSvgFilterUrl, SuperResSvgDefs } from "./SuperResCanvas";
+import { useStore } from "../store";
 import { mediaErrorMessage } from "../mediaErrors";
 import { mediaHost, mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
@@ -55,6 +58,9 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   const nearEndFiredRef = useRef(false);
   const reportedSizeRef = useRef({ w: 0, h: 0 });
   const [ready, setReady] = useState(false);
+  const [svgFallback, setSvgFallback] = useState(false);
+  const srMode = useStore().srMode;
+  const videoFilter = svgFallback ? getSvgFilterUrl(srMode) : undefined;
   const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, active, resource: mediaResource(src) });
   const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay, src, trace });
   const proxyRecovery = useProxyPlaybackRecovery(videoRef, src, activity, trace);
@@ -124,6 +130,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       v.playbackRate = rate;
     };
     applySettings();
+    let releaseLevel: (() => void) | undefined;
 
     if (useHls && Hls.isSupported()) {
       const hls = new Hls({
@@ -148,8 +155,10 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         fragLoadingTimeOut: 25000,
         fragLoadingMaxRetry: 6,
         fragLoadingRetryDelay: 400,
+        capLevelToPlayerSize: false,
       });
       hlsRef.current = hls;
+      releaseLevel = holdLevelCeiling(hls, video);
       observeHls(hls, trace);
       hls.loadSource(url);
       hls.attachMedia(video);
@@ -196,6 +205,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       video.removeEventListener("resize", onVideoResize);
       if (recoverTimerRef.current) { window.clearTimeout(recoverTimerRef.current); recoverTimerRef.current = null; }
       trace("source.cleanup");
+      releaseLevel?.();
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -223,6 +233,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   };
 
   return (
+    <div className={`relative w-full h-full ${className}`}>
+    <SuperResSvgDefs />
     <video
       ref={videoRef}
       poster={poster}
@@ -231,8 +243,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       muted={muted}
       loop={loop}
       onClick={onClick}
-      className={`w-full h-full bg-black ${fit === "cover" ? "object-cover" : "object-contain"} ${className}`}
-      style={{ opacity: ready ? 1 : 0, transition: "opacity .35s" }}
+      className={`absolute inset-0 w-full h-full bg-black ${fit === "cover" ? "object-cover" : "object-contain"}`}
+      style={{ opacity: ready ? 1 : 0, transition: "opacity .35s", filter: videoFilter }}
       onLoadedData={(e) => {
         const v = e.target as HTMLVideoElement;
         setReady(true);
@@ -266,6 +278,16 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       onEnded={() => { if (activity.isActive()) onEnded?.(); }}
       onError={handleVideoError}
     />
+    <SuperResCanvas
+      videoRef={videoRef}
+      mode={srMode}
+      active={active}
+      ready={ready}
+      fit={fit}
+      srcKey={src}
+      onFallbackChange={setSvgFallback}
+    />
+    </div>
   );
 });
 

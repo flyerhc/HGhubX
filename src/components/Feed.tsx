@@ -7,6 +7,7 @@ import type { Detail, Episode, PlayInfo, Post, VideoCard } from "../types";
 import { useStore } from "../store";
 import { Img, Sheet } from "./ui";
 import VideoSurface, { type VideoHandle } from "./VideoSurface";
+import { SR_SHORT_LABEL, SuperResMenu } from "./SuperResCanvas";
 import PlayerControls from "./PlayerControls";
 import { PlaybackProgress, PlaybackTime } from "./PlaybackProgress";
 import PlaybackLock from "./PlaybackLock";
@@ -24,7 +25,7 @@ import { getHoldZone, HOLD_DELAY_MS, HOLD_LOCK_DISTANCE, type HoldZone } from ".
 import { useMobileHoldGuide } from "../useMobileHoldGuide";
 import {
   IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IFileText, IHeart, IHeartF, IMore,
-  ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
+  ILink, IList, ILockF, IPauseF, IPlayF, ISearch, ISparkF, IStar, IStarF, IVertSwap, IVol, IVolMute,
 } from "../icons";
 
 type Props = {
@@ -45,7 +46,7 @@ type Props = {
 
 export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind = "video", active, bottomInset, onBack, onNearEnd, onBlocked, startEp, startTime }: Props) {
   const store = useStore();
-  const { isLiked, isFav, setLiked, setCollected, setFollowing, actionPending, accountScope, muted, setMuted, volume, setVolume, toast, addHistory, user, setLoginOpen, swipeEp, setSwipeEp, preferHevc, setPreferHevc } = store;
+  const { isLiked, isFav, setLiked, setCollected, setFollowing, actionPending, accountScope, muted, setMuted, volume, setVolume, toast, addHistory, user, setLoginOpen, swipeEp, setSwipeEp, preferHevc, setPreferHevc, srMode, setSrMode } = store;
   const isDesktop = !isMobile;
   const holdGuide = useMobileHoldGuide();
   const contentPreferences = useContentPreferences();
@@ -254,6 +255,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const mainUrl = playUrls[playKey] || "";
   const hevcUrl = hevcUrls[playKey] || "";
   const playUrl = preferHevc && hevcUrl ? hevcUrl : mainUrl;
+  const [srMenu, setSrMenu] = useState<null | "rail" | "desk" | "fs">(null);
+  useEffect(() => { setSrMenu(null); }, [playKey]);
   // 等播放画面就绪再提示，启动动画/协议、加载失败和其他面板不叠加教程。
   const showHoldGuide = !isDesktop && !holdGuide.seen && active && allowed
     && !!playUrl && duration > 0 && !err && !panel && !tagMenu && !controlsLocked;
@@ -1301,6 +1304,16 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                       <span className="text-[12px] hg-ov-shadow" style={{ color: preferHevc ? "#fff" : undefined }}>{preferHevc ? "高清" : "标清"}</span>
                     </Button>
                   )}
+                  <div className="relative flex flex-col items-center">
+                    <Button type="button" onClick={() => setSrMenu((pos) => (pos === "rail" ? null : "rail"))}
+                      className="flex flex-col items-center gap-1 pressable" aria-pressed={srMode !== "off"} aria-expanded={srMenu === "rail"} aria-label={`智能画质 ${SR_SHORT_LABEL[srMode]}`}>
+                      <ISparkF size={24} className={srMode === "off" ? "hg-ink hg-ov-shadow" : "text-primary"} />
+                      <span className="text-[12px] hg-ov-shadow tabular-nums" style={{ color: srMode === "off" ? undefined : "#fff" }}>{SR_SHORT_LABEL[srMode]}</span>
+                    </Button>
+                    {srMenu === "rail" && (
+                      <SuperResMenu current={srMode} placement="up" align="right" onSelect={(mode) => { setSrMode(mode); setSrMenu(null); }} />
+                    )}
+                  </div>
                   {kind === "video" && (
                     <Button onClick={() => void onLike()} disabled={likePending} aria-busy={likePending} className="flex flex-col items-center gap-1 pressable" aria-pressed={liked} aria-label="点赞">
                       {liked ? <IHeartF size={27} className="text-neon" /> : <IHeart size={27} className="hg-ink hg-ov-shadow" />}
@@ -1390,6 +1403,17 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                        {preferHevc ? "HD" : "标清"}
                      </Button>
                    )}
+                   <div className="relative shrink-0">
+                     <Button type="button" aria-pressed={srMode !== "off"} aria-expanded={srMenu === "desk"}
+                       onClick={() => setSrMenu((pos) => (pos === "desk" ? null : "desk"))}
+                       aria-label={`智能画质 ${SR_SHORT_LABEL[srMode]}`}
+                       className={`h-[18px] px-1.5 rounded-md text-[12px] font-bold flex items-center gap-0.5 pressable ${srMode !== "off" ? "bg-primary text-on-primary" : "text-white border border-white/30"}`}>
+                       <ISparkF size={11} />{SR_SHORT_LABEL[srMode]}
+                     </Button>
+                     {srMenu === "desk" && (
+                       <SuperResMenu current={srMode} placement="down" align="left" onSelect={(mode) => { setSrMode(mode); setSrMenu(null); }} />
+                     )}
+                   </div>
                    {!!meta.score && (
                   <span className="shrink-0 text-[12px] font-bold hg-gold hg-ov-shadow">{meta.score.toFixed(1)} 分</span>
                   )}
@@ -1581,6 +1605,19 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               {paused ? <IPlayF size={18} /> : <IPauseF size={17} />}
             </Button>
             <PlaybackTime clock={playbackClock} className="shrink-0 text-[12px] font-semibold hg-ink-2 tabular-nums" />
+            <div className="relative ml-auto shrink-0">
+              <Button
+                onClick={() => setSrMenu((pos) => (pos === "fs" ? null : "fs"))}
+                aria-label={`智能画质 ${SR_SHORT_LABEL[srMode]}`}
+                aria-expanded={srMenu === "fs"}
+                aria-pressed={srMode !== "off"}
+                className={`flex items-center gap-1 px-2.5 h-8 rounded-full text-[13px] font-bold pressable ${srMode !== "off" ? "bg-primary text-on-primary" : "hg-chip hg-ink-2"}`}>
+                <ISparkF size={12} />{SR_SHORT_LABEL[srMode]}
+              </Button>
+              {srMenu === "fs" && (
+                <SuperResMenu current={srMode} placement="up" align="right" onSelect={(mode) => { setSrMode(mode); setSrMenu(null); }} />
+              )}
+            </div>
             <Button
               onClick={() => {
                 if (speedLock) { setSpeedLock(false); return; }
@@ -1588,7 +1625,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 const i = seq.indexOf(rate);
                 setRate(seq[(i + 1) % seq.length]);
               }}
-              className={`ml-auto shrink-0 flex items-center gap-1 px-2.5 h-8 rounded-full text-[13px] font-bold pressable ${effRate !== 1 ? "bg-primary text-on-primary" : "hg-chip hg-ink-2"}`}>
+              className={`shrink-0 flex items-center gap-1 px-2.5 h-8 rounded-full text-[13px] font-bold pressable ${effRate !== 1 ? "bg-primary text-on-primary" : "hg-chip hg-ink-2"}`}>
               <IBoltF size={12} />{effRate}x
             </Button>
             {curEp < episodes.length && (
