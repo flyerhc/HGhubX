@@ -392,6 +392,24 @@ static CLIENTS: Lazy<Mutex<ClientCache>> = Lazy::new(|| Mutex::new(HashMap::new(
 static MEDIA_DNS_ROUTES: Lazy<Mutex<crate::media_dns::Routes>> =
     Lazy::new(|| Mutex::new(crate::media_dns::Routes::default()));
 
+/// Immutable transport identity captured when a media single-flight starts.
+///
+/// A proxy/line refresh increments `generation`; changing security mode changes
+/// `strict`. Both must participate in the key so a waiter can never join a
+/// download started under a different transport or target policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RequestScope {
+    pub(crate) strict: bool,
+    pub(crate) generation: u64,
+}
+
+pub(crate) fn request_scope() -> RequestScope {
+    RequestScope {
+        strict: network_policy::strict_security(),
+        generation: CLIENT_GENERATION.load(Ordering::Acquire),
+    }
+}
+
 fn cached_client(cache: &ClientCache, key: &str, now: Instant) -> Option<Arc<reqwest::Client>> {
     cache
         .get(key)
