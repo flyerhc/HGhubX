@@ -49,6 +49,41 @@ export const cover = (url?: string, _w = 480) =>
 /** 播放列表：经本地协议改写分片地址，规避 CORS 与防盗链。 */
 export const playlist = (url: string) => `${LOCAL}/hls?u=${encodeURIComponent(url)}`;
 
+/**
+ * iOS 15–17.0 没有 MSE，系统播放器也读不了 `hg://`。
+ * 返回本机 HTTP 根地址；失败不缓存，方便稍后重试。
+ */
+let loopbackPromise: Promise<string> | null = null;
+export function iosLoopbackOrigin(): Promise<string> {
+  if (platform !== "ios") return Promise.resolve("");
+  if (!loopbackPromise) {
+    loopbackPromise = invoke<string>("media_http_origin")
+      .then((origin) => {
+        if (!origin) loopbackPromise = null;
+        return origin || "";
+      })
+      .catch(() => {
+        loopbackPromise = null;
+        return "";
+      });
+  }
+  return loopbackPromise;
+}
+
+function upstreamMediaUrl(src: string): string {
+  const query = src.split("?")[1]?.split("#")[0];
+  if (!query) return src;
+  const upstream = new URLSearchParams(query).get("u");
+  return upstream && /^https?:\/\//i.test(upstream) ? upstream : src;
+}
+
+/** 把上游地址包进本机 HTTP。播放列表保持整段返回，不按 Range 切开。 */
+export function iosNativeMediaUrl(origin: string, src: string): string {
+  const target = upstreamMediaUrl(src);
+  const route = /\.m3u8(\?|$)/i.test(target) ? "hls" : "seg";
+  return `${origin.replace(/\/$/, "")}/${route}?u=${encodeURIComponent(target)}`;
+}
+
 /* ── 调用封装 ───────────────────────────────────────────── */
 
 /** 写一行到应用数据目录 debug.log（用户反馈「打不开」时要的就是它） */

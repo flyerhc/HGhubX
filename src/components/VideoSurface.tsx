@@ -1,6 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "react";
 import Hls from "hls.js";
-import { isLocalMedia, platform, playlist } from "../api";
+import { iosNativeMediaUrl, isLocalMedia, platform, playlist } from "../api";
+import { useIosLoopback } from "../useIosLoopback";
 import { mediaErrorMessage } from "../mediaErrors";
 import { mediaHost, mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
@@ -58,6 +59,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, active, resource: mediaResource(src) });
   const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay, src, trace });
   const proxyRecovery = useProxyPlaybackRecovery(videoRef, src, activity, trace);
+  const iosNative = useIosLoopback();
 
   const reportSize = (v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -101,6 +103,11 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
+    if (iosNative.needed && !iosNative.ready) return;
+    if (iosNative.needed && !iosNative.origin) {
+      onError?.("本机播放服务未就绪");
+      return;
+    }
     setReady(false);
     reportedSizeRef.current = { w: 0, h: 0 };
     nearEndFiredRef.current = false;
@@ -111,7 +118,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
     const proxied = isLocalMedia(src);
-    const url = proxied ? src : playlist(src);
+    let url = proxied ? src : playlist(src);
+    if (iosNative.needed && iosNative.origin) url = iosNativeMediaUrl(iosNative.origin, src);
     const useHls = !url.includes("/seg?u=");
     trace("source.load", { engine: useHls && Hls.isSupported() ? "hls.js" : "native", auto_play: autoPlay, resource: mediaResource(src), host: mediaHost(src) });
 
@@ -199,7 +207,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src, proxyRecovery.revision]);
+  }, [src, proxyRecovery.revision, iosNative.needed, iosNative.ready, iosNative.origin]);
 
   // iOS 内联播放：部分 WKWebView 只认 HTML 属性
   useEffect(() => {

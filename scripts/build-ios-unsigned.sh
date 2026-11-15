@@ -51,6 +51,16 @@ if [[ -z "$PROJECT" || -z "$SCHEME" ]]; then
 fi
 echo "project=$PROJECT scheme=$SCHEME"
 
+# iOS 15–17.0 的系统播放器要访问 127.0.0.1 上的播放列表。
+INFO_PLIST="$(find src-tauri/gen/apple -name Info.plist -path '*iOS*' | head -1)"
+if [[ -n "${INFO_PLIST}" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$INFO_PLIST" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$INFO_PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsLocalNetworking true" "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" "$INFO_PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent true" "$INFO_PLIST"
+fi
+
 # Xcode 生成的配置是小写 release；Swift 兼容库要显式指到 toolchain 里
 XCODE_TOOLCHAIN="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain"
 test -d "$XCODE_TOOLCHAIN/usr/lib/swift/iphoneos"
