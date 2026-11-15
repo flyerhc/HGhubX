@@ -31,6 +31,7 @@ function ProfileContent({ wide }: { wide: boolean }) {
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
   const logoutPending = useRef(false);
+  const [clearOpen, setClearOpen] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
   const [clearError, setClearError] = useState("");
   const clearing = useRef(false);
@@ -89,6 +90,7 @@ function ProfileContent({ wide }: { wide: boolean }) {
     setClearBusy(true); setClearError("");
     try {
       await clearHistory();
+      if (mounted.current) setClearOpen(false);
     } catch (error) {
       if (mounted.current) setClearError(error instanceof Error ? error.message : "清空失败，观看记录已保留，请重试");
     } finally {
@@ -205,9 +207,9 @@ function ProfileContent({ wide }: { wide: boolean }) {
           {visibleIds.length < ids.length && <Button disabled={loading} onClick={() => setLimits(previous => ({ ...previous, [tab]: previous[tab] + 12 }))}
             className="mt-3 w-full rounded-(--r-ctl) bg-s3 text-[13px] text-on">加载更多</Button>}
           {tab === "history" && history.length > 0 && (
-            <Button disabled={clearBusy} aria-busy={clearBusy} onClick={() => void clearWatchHistory()} className="mt-3 w-full h-9 rounded-(--r-ctl) bg-s3 text-[13px] text-mut pressable">{clearBusy ? "正在清空…" : "清空观看历史"}</Button>
+            <Button disabled={clearBusy} aria-busy={clearBusy} onClick={() => { setClearError(""); setClearOpen(true); }} className="mt-3 w-full h-9 rounded-(--r-ctl) bg-s3 text-[13px] text-mut pressable">{clearBusy ? "正在清空…" : "清空观看历史"}</Button>
           )}
-          {clearError && <p role="alert" className="mt-2 text-[13px] text-danger">{clearError}</p>}
+          {clearError && !clearOpen && <p role="alert" className="mt-2 text-[13px] text-danger">{clearError}</p>}
         </div>
 
         <div className="text-center text-[12px] text-dim mt-5">HGhubX {APP_VERSION} · {platform === "android" ? "Android" : platform === "ios" ? "iOS" : platform === "macos" ? "macOS" : platform === "linux" ? "Linux" : "Windows"} 客户端</div>
@@ -221,6 +223,19 @@ function ProfileContent({ wide }: { wide: boolean }) {
             <Button variant="secondary" disabled={logoutBusy} onClick={() => setLogoutOpen(false)} className="flex-1">取消</Button>
             <Button variant="danger" disabled={logoutBusy} onClick={() => void confirmLogout()} className="flex-1 rounded-(--r-ctl) px-3">
               {logoutBusy ? "正在退出…" : "确认退出"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+      <Modal open={clearOpen} onClose={() => { if (!clearing.current) setClearOpen(false); }} label="清空观看历史">
+        <div className="p-5">
+          <h2 className="text-[18px] font-bold">清空观看历史</h2>
+          <p className="mt-2 text-[14px] text-mut">确认清空全部观看历史？{user ? "当前账号的云端观看历史与本机缓存都会被清除。" : "本机游客观看历史会被清除。"}此操作无法撤销，收藏不会受影响。</p>
+          {clearError && <p role="alert" className="mt-3 text-[13px] text-danger">{clearError}</p>}
+          <div className="mt-4 flex gap-3">
+            <Button variant="secondary" disabled={clearBusy} onClick={() => setClearOpen(false)} className="flex-1">取消</Button>
+            <Button variant="danger" disabled={clearBusy} aria-busy={clearBusy} onClick={() => void clearWatchHistory()} className="flex-1 rounded-(--r-ctl) px-3">
+              {clearBusy ? "正在清空…" : "确认清空"}
             </Button>
           </div>
         </div>
