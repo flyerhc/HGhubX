@@ -26,6 +26,11 @@ function focusables(root: HTMLElement) {
     .sort((a, b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
 }
 
+function isDialogAvailable(root: HTMLElement) {
+  return root.isConnected && root.getClientRects().length > 0
+    && !root.closest('[inert], [hidden], [aria-hidden="true"]');
+}
+
 /**
  * Isolate a full-page dialog that lives inside the page being covered.
  * Portaled dialogs use the shared overlay layer; this hook handles in-page
@@ -37,7 +42,7 @@ export function useDialogFocusTrap(open: boolean, rootRef: RefObject<HTMLElement
 
   useLayoutEffect(() => {
     const root = rootRef.current;
-    if (!open || !root) return;
+    if (!open || !root || !isDialogAvailable(root)) return;
 
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const changed: [HTMLElement, boolean][] = [];
@@ -60,6 +65,9 @@ export function useDialogFocusTrap(open: boolean, rootRef: RefObject<HTMLElement
     initial.focus({ preventScroll: true });
 
     const onFocus = (event: FocusEvent) => {
+      // Stack pages stay mounted beneath pushed content. A hidden dialog must
+      // neither reclaim focus nor prevent the visible page from receiving it.
+      if (!isDialogAvailable(root)) return;
       if (event.target instanceof HTMLElement && root.contains(event.target)) {
         lastFocused = event.target;
         return;
@@ -68,6 +76,7 @@ export function useDialogFocusTrap(open: boolean, rootRef: RefObject<HTMLElement
       target.focus({ preventScroll: true });
     };
     const onKey = (event: KeyboardEvent) => {
+      if (!isDialogAvailable(root)) return;
       if (event.isComposing) return;
       if (event.key === "Escape") {
         event.preventDefault();

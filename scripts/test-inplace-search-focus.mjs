@@ -88,6 +88,42 @@ try {
   assert.equal(await trigger.evaluate(element => element === document.activeElement), true);
   report.checks.push("Escape also closes the search from a field/results state");
 
+  await trigger.click();
+  const coveredDialog = page.getByRole("dialog", { name: "短剧搜索", exact: true, includeHidden: true });
+  await coveredDialog.waitFor();
+  await page.getByRole("textbox", { name: "短剧搜索关键词", exact: true }).fill("都市");
+  await page.getByRole("textbox", { name: "短剧搜索关键词", exact: true }).press("Enter");
+  await page.getByRole("button").filter({ hasText: "城市与晚风" }).first().click();
+  await page.locator(".desktop-context-header").first().waitFor();
+  assert.equal(await coveredDialog.evaluate(element => !!element.closest("[inert]")), true,
+    "Opening a Feed covers and inerts the mounted in-place search");
+
+  await page.evaluate(() => {
+    document.body.tabIndex = -1;
+    document.body.focus();
+  });
+  assert.equal(await page.evaluate(() => document.activeElement === document.body), true);
+  await page.keyboard.press("Tab");
+  const coveredTabState = await page.evaluate(() => ({
+    onBody: document.activeElement === document.body,
+    insideSearch: !!document.activeElement?.closest(".ios-inplace-search"),
+    insideInert: !!document.activeElement?.closest("[inert]"),
+  }));
+  assert.deepEqual(coveredTabState, { onBody: false, insideSearch: false, insideInert: false },
+    "Tab in a visible Feed is not swallowed by the hidden search");
+  report.checks.push("covered search does not intercept Tab in the Feed");
+
+  await page.evaluate(() => {
+    document.body.tabIndex = -1;
+    document.body.focus();
+  });
+  await page.keyboard.press("Escape");
+  await page.locator(".desktop-context-header").first().waitFor({ state: "detached" });
+  assert.equal(await coveredDialog.isVisible(), true, "Escape exits the Feed instead of closing the covered search");
+  await page.keyboard.press("Escape");
+  await coveredDialog.waitFor({ state: "detached" });
+  report.checks.push("covered search does not intercept Escape; returning to it preserves the open search");
+
   report.passed = true;
   await page.screenshot({ path: fileURLToPath(new URL("final.png", output)), animations: "disabled" });
 } catch (error) {
