@@ -28,7 +28,7 @@ try {
   await vite.listen();
   const origin = vite.resolvedUrls.local[0];
   for (const scenario of cases) {
-    browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || "/usr/bin/google-chrome",
+    browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || undefined,
       ...(scenario.minimumFontSize ? { args: [`--blink-settings=minimumFontSize=${scenario.minimumFontSize},minimumLogicalFontSize=${scenario.minimumFontSize}`] } : {}) });
     const context = await browser.newContext({ viewport: { width: scenario.width, height: scenario.height },
       userAgent: scenario.platform === "android" ? android : iphone, isMobile: true, hasTouch: true,

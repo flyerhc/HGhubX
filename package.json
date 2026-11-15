@@ -28,7 +28,10 @@
     "android:icons": "node scripts/sync-android-icons.mjs",
     "ios:icons": "node scripts/generate-ios-icons.mjs",
     "android:dev": "tauri android dev",
-    "android:build": "tauri android build"
+    "android:build": "tauri android build",
+    "test:cache": "node scripts/test-playback-cache.mjs",
+    "test:security": "node scripts/test-security.mjs",
+    "test:playback-local": "node scripts/test-playback-local.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
@@ -50,7 +53,8 @@
     "playwright-core": "1.63.0",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
-    "vite": "7.3.2"
+    "vite": "7.3.2",
+    "esbuild": "0.27.7"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

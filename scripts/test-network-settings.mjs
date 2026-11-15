@@ -16,7 +16,7 @@ try {
   vite = await createServer({ root, server: { host: "127.0.0.1", port: 0 } });
   await vite.listen();
   const origin = vite.resolvedUrls.local[0];
-  browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || "/usr/bin/google-chrome" });
+  browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || undefined });
   async function open({ mobile = false, theme = "dark", width = 375, height = 812 } = {}) {
     const context = await browser.newContext({ viewport: mobile ? { width, height } : { width: 1280, height: 900 }, reducedMotion: "reduce",
       ...(mobile ? { userAgent: "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36" } : {}) });

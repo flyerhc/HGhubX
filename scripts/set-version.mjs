@@ -25,15 +25,15 @@ if (!raw) {
   process.exit(1);
 }
 
-const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(raw);
+const m = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(raw);
 if (!m) {
   console.error(`版本号格式不对: ${raw}（要 1.2.3 或 1.2.3+hg.1 这种）`);
   process.exit(1);
 }
 
 const [, major, minor, patch] = m.map(Number);
-if (minor > 999 || patch > 999) {
-  console.error("minor / patch 超过 999，versionCode 会撞车，换个号");
+if (![major, minor, patch].every(Number.isSafeInteger) || minor > 999 || patch > 999 || major * 1_000_000 + minor * 1_000 + patch > 2_100_000_000) {
+  console.error("版本数字超出 Android versionCode 范围，换个号");
   process.exit(1);
 }
 const versionCode = major * 1_000_000 + minor * 1_000 + patch;

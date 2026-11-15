@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { api, cover, fmt, fmtTime, isMobile, logLine, mediaUrl } from "../api";
 import type { Detail, Episode, Post, VideoCard } from "../types";
+import { useWatchProgress } from "../useWatchProgress";
+import type { CacheRange } from "../playbackCache";
 import { useStore } from "../store";
 import { Avatar, Img, Sheet } from "./ui";
 import VideoSurface, { type VideoHandle } from "./VideoSurface";
@@ -17,7 +19,7 @@ import { tracePlayback } from "../playbackDiagnostics";
 import { createPlaybackClock } from "../playbackClock";
 import {
   IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IFileText, IHeart, IHeartF,
-  ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
+  ILink, IList, ISubtitles, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
 } from "../icons";
 
 type Props = {
@@ -41,14 +43,15 @@ const stripHtml = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, "
 
 export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind = "video", active, bottomInset, onBack, onNearEnd, startEp, startTime }: Props) {
   const store = useStore();
-  const { isLiked, isFav, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, muted, setMuted, volume, setVolume, toast, addHistory, user, setLoginOpen, swipeEp, setSwipeEp, preferHevc, setPreferHevc } = store;
+  const { isLiked, isFav, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, muted, setMuted, volume, setVolume, toast, subtitlesEnabled, setSubtitlesEnabled, user, setLoginOpen, swipeEp, setSwipeEp, preferHevc, setPreferHevc } = store;
   const isDesktop = !isMobile;
 
   const boxRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<VideoHandle>(null);
   const [index, setIndex] = useState(startIndex);
+  const progress = useWatchProgress({ id: videoIds[index], active, videoRef, startEp, startTime, sourceKey: preferHevc ? "hevc" : "main" });
+  const [cacheRanges, setCacheRanges] = useState<CacheRange[]>([]);
   const [renderIndex, setRenderIndex] = useState(startIndex);
-  const [epMap, setEpMap] = useState<Record<number, number>>(() => (startEp ? { [videoIds[startIndex]]: startEp } : {}));
   const [details, setDetails] = useState<Record<number, Detail>>({});
   const [playUrls, setPlayUrls] = useState<Record<string, string>>({});
   const [hevcUrls, setHevcUrls] = useState<Record<string, string>>({});
@@ -69,13 +72,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [err, setErr] = useState("");
   const [panel, setPanel] = useState<"episodes" | "comments" | "article" | "detail" | null>(null);
   const [descOpen, setDescOpen] = useState(false);
-  /* 续播：拿到时长后再 seek 一次（只对进入时那一条生效） */
-  const resumeRef = useRef<{ key: string; t: number } | null>(
-    startTime && startTime > 1 ? { key: `${videoIds[startIndex]}:${startEp || 1}`, t: startTime } : null,
-  );
-  /* 观看进度：onTime 里节流写回 store，卸载时再兜一次 */
-  const liveRef = useRef({ id: 0, ep: 1, dur: 0, t: 0 });
-  const lastSaveRef = useRef(0);
   const theater = store.theater;
   const setTheater = store.setTheater;
   const fs = store.fs;
@@ -134,7 +130,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   const curId = videoIds[index];
   const detail = details[curId];
-  const curEp = epMap[curId] || 1;
+  const curEp = progress.episode;
   const playKey = `${curId}:${curEp}`;
   const mainUrl = playUrls[playKey] || "";
   const hevcUrl = hevcUrls[playKey] || "";
@@ -155,29 +151,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const episodes = detail?.episodes || [];
   const post = posts[curId];
 
-  /* 观看进度：onTime 里每 5 秒落一次；退出播放页时再用 liveRef 兜一次 */
-  const onTimeTick = (t: number) => {
-    liveRef.current = { id: curId, ep: curEp, dur: duration, t };
-    if (isDesktop) playbackClock.publish(t);
-    else setTime(t);
-    const now = Date.now();
-    if (duration > 0 && now - lastSaveRef.current > 5000) {
-      lastSaveRef.current = now;
-      addHistory(curId, curEp, t, duration);
-    }
-  };
-
-  /* 拿到时长后再续播：只对进入时那一条生效，且不跳到片尾 */
+  const onTimeTick = (t: number) => { if (progress.onTime()) { if (isDesktop) playbackClock.publish(t); else setTime(t); } };
   const onDurationTick = (d: number) => {
     setDuration(d);
-    liveRef.current = { ...liveRef.current, dur: d };
-    const r = resumeRef.current;
-    if (r && r.key === playKey && r.t > 1 && (!d || r.t < d - 3)) {
-      resumeRef.current = null;
-      videoRef.current?.seek(r.t, "history_resume");
-      if (isDesktop) playbackClock.publish(r.t);
-      else setTime(r.t);
-    }
+    const restored = progress.onDuration(d);
+    if (restored !== undefined) { if (isDesktop) playbackClock.publish(restored); else setTime(restored); }
   };
 
   /** 统一视图模型：短剧与吃瓜帖子共用同一套播放界面 */
@@ -277,21 +255,21 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
      桌面端键盘 ↑↓ 与右侧按钮都走这里，和移动端上下划手势保持一致。 */
   const stepDir = useCallback((dir: number) => {
     if (swipeEp && kind === "video") {
-      const ep = epMap[curId] || 1;
+      const ep = curEp;
       const total = episodes.length;
       const want = dir === 1 ? (total === 0 || ep < total ? ep + 1 : 0) : (ep > 1 ? ep - 1 : 0);
       if (want) {
-        setEpMap((m) => ({ ...m, [curId]: want }));
+        progress.selectEpisode(want);
         setPanel(null);
         return;
       }
     }
     go(dir);
-  }, [swipeEp, kind, epMap, curId, episodes.length, go]);
+  }, [swipeEp, kind, curEp, progress.selectEpisode, curId, episodes.length, go]);
 
   const canStep = (dir: number) => {
     if (swipeEp && kind === "video") {
-      const ep = epMap[curId] || 1;
+      const ep = curEp;
       const total = episodes.length;
       if (dir === 1 ? (total === 0 || ep < total) : ep > 1) return true;
     }
@@ -374,7 +352,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         if (!streamUrl) throw new Error("暂无播放地址");
         setPlayUrls((m) => ({ ...m, [playKey]: streamUrl }));
         if (hevcStream) setHevcUrls((m) => ({ ...m, [playKey]: hevcStream }));
-        addHistory(curId, curEp);
+
       })
       .catch((e) => { if (alive) setErr((e as Error).message || "取播放地址失败"); });
     return () => { alive = false; };
@@ -384,7 +362,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   /* 剧集预热：相邻集提前取好播放地址，切集秒开 */
   useEffect(() => {
     if (!curId || kind !== "video") return;
-    const ep = epMap[curId] || 1;
+    const ep = curEp;
     const total = episodes.length;
     const want: number[] = [];
     if (ep > 1) want.push(ep - 1);
@@ -406,7 +384,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /* 切换条目/集数时重置播放状态 */
   useEffect(() => {
-    setTime(0); setDuration(0); bufferedRef.current = 0; setErr(""); setWaiting(true); setPaused(false); setDescOpen(false);
+    setTime(0); setDuration(0); setCacheRanges([]); bufferedRef.current = 0; setErr(""); setWaiting(true); setPaused(false); setDescOpen(false);
     playbackClock.publish(0);
     setVsize({ w: 0, h: 0 });
     setPortraitFit("contain");
@@ -417,13 +395,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   useEffect(() => { videoRef.current?.volume(volume); }, [volume]);
   /* 倍速同步（长按 2x / 锁定 2x / 基准倍速） */
   useEffect(() => { videoRef.current?.rate(effRate); }, [effRate, playKey]);
-
-  /* 离开播放页时把最后位置落盘 */
-  useEffect(() => () => {
-    const s = liveRef.current;
-    if (s.id && s.dur) addHistory(s.id, s.ep, s.t, s.dur);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   /* 键盘 */
   useEffect(() => {
@@ -616,11 +587,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       const dx2 = e.clientX - g.x;
       if (Math.abs(dy) > 56 && Math.abs(dy) > Math.abs(dx2)) {
         const dir = dy < 0 ? 1 : -1;
-        const ep = epMap[curId] || 1;
+        const ep = curEp;
         const total = episodes.length;
         const want = dir === 1 ? (total === 0 || ep < total ? ep + 1 : 0) : (ep > 1 ? ep - 1 : 0);
         if (swipeEp && kind === "video" && want) {
-          setEpMap((m) => ({ ...m, [curId]: want }));
+          progress.selectEpisode(want);
           toast(`第 ${want}集${total ? ` / ${total}` : ""}`, "info");
           try { navigator.vibrate?.(12); } catch { /* ignore */ }
           return;
@@ -857,7 +828,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   };
 
   const pickEp = (ep: number) => {
-    setEpMap((m) => ({ ...m, [curId]: ep }));
+    progress.selectEpisode(ep);
     setPanel(null);
   };
 
@@ -900,18 +871,19 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 <div className="absolute inset-0" style={{ touchAction: swipeEp ? "none" : "pan-y" }}
                   onPointerDown={onDown} onPointerMove={onMove} onPointerUp={(e) => onUp(false, e)} onPointerCancel={(e) => onUp(true, e)} onLostPointerCapture={(e) => onUp(true, e)}>
                 <div style={{ position: "absolute", inset: 0, transform: isDesktop ? undefined : `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.s})`, transformOrigin: "center center", transition: isDesktop || zoom.g ? "none" : "transform .18s ease-out" }}>
-                <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay active={active} muted={muted}
+                <VideoSurface key={progress.key} ref={videoRef} src={playUrl} poster={posterUrl} autoPlay active={active} muted={muted}
                   diagnosticContext={{ active, view: mode, kind, video_id: curId, episode: curEp }}
                   volume={volume} rate={effRate}
                   fit={isDesktop ? "contain" : landscapeVideo ? (fs || vpLandscape ? "contain" : portraitFit) : (vpLandscape ? "contain" : "cover")}
                   onClick={() => { if (isDesktop) videoRef.current?.toggle(); }}
+                  subtitlesEnabled={subtitlesEnabled} onCacheRanges={setCacheRanges} onSeekRequest={progress.onSeekRequest}
                   onTime={onTimeTick}
                   onDuration={onDurationTick}
                   onSize={(w, h) => setVsize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }))}
-                  onPlaying={() => { setPaused(false); setWaiting(false); setErr(""); }}
-                  onPause={() => setPaused(true)}
+                  onPlaying={() => { progress.onPlaying(); setPaused(false); setWaiting(false); setErr(""); }}
+                  onPause={() => { progress.onPause(); setPaused(true); }}
                   onWaiting={() => setWaiting(true)}
-                  onEnded={() => { const next = episodes.find((e) => e.ep_num === curEp + 1); if (next) pickEp(next.ep_num); }}
+                  onEnded={() => { if (!progress.onEnded()) return; const next = episodes.find((e) => e.ep_num === curEp + 1); if (next) pickEp(next.ep_num); }}
                   onError={(m) => {
                     setErr(m);
                     if (preferHevc && hevcUrl) {
@@ -1034,6 +1006,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                       <span className="text-[12px] hg-ov-shadow" style={{ color: preferHevc ? "#fff" : undefined }}>{preferHevc ? "高清" : "标清"}</span>
                     </Button>
                   )}
+                  <Button type="button" aria-label="字幕" aria-pressed={subtitlesEnabled} onClick={() => setSubtitlesEnabled(!subtitlesEnabled)} className="flex flex-col items-center gap-1 pressable">
+                    <ISubtitles size={26} className="hg-ink hg-ov-shadow" /><span className="text-[10.5px] hg-ink-2">字幕</span>
+                  </Button>
                   <Button onClick={onFav} className="flex flex-col items-center gap-1 pressable" aria-pressed={isFav(curId)} aria-label="收藏">
                     {isFav(curId) ? <IStarF size={27} className="hg-gold" /> : <IStar size={27} className="hg-ink hg-ov-shadow" />}
                     <span className="text-[12px] hg-ink-2 hg-ov-shadow">收藏</span>
@@ -1111,7 +1086,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                     </span>
                   )}
                    {hevcUrl && (
-                     <Button type="button" aria-pressed={preferHevc}
+                     <Button type="button" aria-label="画质切换" aria-pressed={preferHevc}
                        onClick={() => { setPreferHevc(!preferHevc); toast(preferHevc ? "已切回标准画质" : "已切换高清 HEVC", "ok"); }}
                        className={`shrink-0 h-[18px] px-1.5 rounded-md text-[12px] font-bold flex items-center pressable transition-colors ${preferHevc ? "bg-primary text-on-primary" : "text-white border border-white/30"}`}>
                        {preferHevc ? "HD" : "标清"}
@@ -1151,6 +1126,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                       onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
                       {/* 轨道：几乎看不见，只暗示可拖动 */}
                       <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[2px] rounded-full" style={{ background: "rgba(255,255,255,.1)" }}>
+                        {cacheRanges.map((r, i) => <span key={i} className="absolute inset-y-0 bg-primary/40" style={{ left: `${duration ? r.start / duration * 100 : 0}%`, width: `${duration ? (r.end - r.start) / duration * 100 : 0}%` }} />)}
                         <div className="h-full rounded-full"
                           style={{ width: `${barProgress * 100}%`, background: "rgba(255,255,255,.26)", transition: barPct !== null ? "none" : "width .25s linear" }} />
                       </div>
@@ -1215,6 +1191,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         <PlayerControls
           paused={paused} duration={duration} buffered={bufferedRef.current} rate={rate}
           clock={playbackClock}
+          cacheRanges={cacheRanges} subtitlesEnabled={subtitlesEnabled} onSubtitles={() => setSubtitlesEnabled(!subtitlesEnabled)}
           muted={muted} volume={volume} theater={theater} fullscreen={fullscreen}
           visible={active && !idle}
           seekEnabled={active && !controlsLocked}
@@ -1276,7 +1253,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           <div ref={barRef} className="relative h-full" style={{ touchAction: "none" }}
             onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
             <div className="absolute inset-x-0 bottom-[8px] h-[2.5px] rounded-full" style={{ background: "rgba(255,255,255,.3)" }}>
-              <div className="h-full rounded-full bg-white" style={{ width: `${barProgress * 100}%` }} />
+              {duration > 0 && cacheRanges.map((range, i) => <span key={i} className="absolute h-full bg-primary/40" style={{ left: `${Math.max(0, range.start / duration) * 100}%`, width: `${Math.max(0, Math.min(duration, range.end) - Math.max(0, range.start)) / duration * 100}%` }} />)}
+              <div className="relative h-full rounded-full bg-white" style={{ width: `${barProgress * 100}%` }} />
             </div>
           </div>
         </div>

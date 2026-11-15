@@ -1,4 +1,4 @@
-import { Button, SegmentedControl, Surface, TextArea } from "../components/ios/controls";
+import { Button, Input, SegmentedControl, Surface, TextArea } from "../components/ios/controls";
 import { useEffect, useState, type ReactNode } from "react";
 import { api, APP_VERSION, hostOf, logLine, platform, type UpdateInfo } from "../api";
 import { useStore } from "../store";
@@ -21,13 +21,20 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 /* 独立设置页：线路 / 外观 / 播放 / 本地数据 / 清理缓存 / 网络诊断 / 关于
    入口：Windows 侧栏「设置」、Android「我的」右上角齿轮 */
 export default function Settings({ onBack, wide }: { onBack: () => void; wide: boolean }) {
-  const { theme, themePreference, setTheme, favs, history, muteOnStartup, setMuteOnStartup, preferHevc, setPreferHevc, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity, toast } = useStore();
+  const { theme, themePreference, setTheme, favs, history, muteOnStartup, setMuteOnStartup, subtitlesEnabled, setSubtitlesEnabled, preferHevc, setPreferHevc, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity, toast } = useStore();
   const [about, setAbout] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [lineOpen, setLineOpen] = useState(false);
   const [lineBase, setLineBase] = useState("");
   const [autoLineOn, setAutoLineOn] = useState(autoLineEnabled);
   const [clearing, setClearing] = useState(false);
+  const [cacheLimit, setCacheLimit] = useState("");
+  const [cacheBytes, setCacheBytes] = useState(0);
+  const [cacheReady, setCacheReady] = useState(false);
+  const [cacheSaving, setCacheSaving] = useState(false);
+  const [cidrs, setCidrs] = useState("");
+  const [cidrsReady, setCidrsReady] = useState(false);
+  const [cidrsSaving, setCidrsSaving] = useState(false);
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   /** 应用内更新进行到哪一步（空串=没在更新） */
@@ -38,7 +45,24 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
   const [diagReport, setDiagReport] = useState<string | null>(null);
   const [copyingReport, setCopyingReport] = useState(false);
 
+  useEffect(() => {
+    api.playbackCacheStatus().then(({ max_mib, bytes }) => { setCacheLimit(String(max_mib)); setCacheBytes(bytes); setCacheReady(true); })
+      .catch(() => toast("无法读取播放缓存设置", "info"));
+  }, [toast]);
+  useEffect(() => {
+    api.securityCidrsGet().then((value) => { setCidrs(value); setCidrsReady(true); })
+      .catch(() => toast("无法读取 CIDR 例外设置", "info"));
+  }, [toast]);
   useEffect(() => { void initPlaybackLog(); }, []);
+  useEffect(() => {
+    let mounted = true;
+    const timer = window.setInterval(() => {
+      void api.playbackCacheStatus().then(({ bytes }) => { if (mounted) setCacheBytes(bytes); }).catch(() => {});
+    }, 2000);
+    return () => { mounted = false; window.clearInterval(timer); };
+  }, []);
+
+
 
   const readLine = () => { api.lineState().then((state) => setLineBase(state.base)).catch(() => {}); };
   useEffect(() => {
@@ -130,6 +154,29 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
             </div>
           </Section>
 
+          <Section title="字幕">
+            <div className="flex items-center justify-between px-3.5 py-3">
+              <span className="text-[12.5px] text-on">显示字幕</span>
+              <Toggle on={subtitlesEnabled} onChange={setSubtitlesEnabled} label="显示字幕" />
+            </div>
+          </Section>
+          <Section title="播放缓存">
+            <div className="px-3.5 py-3">
+              <label htmlFor="playback-cache-size" className="text-[12.5px] text-on">播放磁盘缓存上限（MiB）</label>
+              <div className="text-[10.5px] text-mut mt-1">0 为关闭并删除播放磁盘缓存；开启时填写 128–4096 的整数。当前占用 {(cacheBytes / 1048576).toFixed(1)} MiB。</div>
+              <div className="flex gap-2 mt-2">
+                <Input id="playback-cache-size" type="number" min="0" max="4096" step="1" value={cacheLimit} onChange={(e) => setCacheLimit(e.target.value)} disabled={!cacheReady || cacheSaving} className="min-w-0 flex-1 rounded bg-s3 px-2 py-1 text-[12.5px] text-on" />
+                <Button disabled={!cacheReady || cacheSaving} className="rounded bg-s3 px-3 py-1 text-[12.5px] text-on disabled:opacity-50" onClick={() => {
+                  const value = Number(cacheLimit);
+                  if (!/^\d+$/.test(cacheLimit) || (value !== 0 && (value < 128 || value > 4096))) { toast("请输入 0 或 128–4096 的整数", "info"); return; }
+                  setCacheSaving(true);
+                  void api.playbackCacheSet(value).then(() => api.playbackCacheStatus()).then((status) => { setCacheLimit(String(status.max_mib)); setCacheBytes(status.bytes); toast("播放缓存设置已保存", "ok"); })
+                    .catch((e) => toast((e as Error).message || "保存失败", "info")).finally(() => setCacheSaving(false));
+                }}>保存</Button>
+              </div>
+            </div>
+          </Section>
+
           <Section title="本地数据">
             <div className="flex items-center gap-3 px-3.5 py-3">
               <span className="ios-setting-icon"><IHeart size={16} /></span>
@@ -191,6 +238,19 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
                 label="严格安全模式"
               />
             </div>
+            {strictSecurity && <div className="px-3.5 py-3">
+              <label htmlFor="allowed-cidrs" className="text-[12.5px] text-on">允许连接的 IP CIDR 例外</label>
+              <div className="text-[10.5px] text-mut mt-1">IPv4 / IPv6 网段以英文逗号分隔，例如 fd00::/8, 10.20.0.0/16。198.18.0.0/15 已默认放行，无需填写。列表中的内网和保留地址也可连接，请仅填写可信网段。</div>
+              <div className="flex gap-2 mt-2">
+                <Input id="allowed-cidrs" type="text" value={cidrs} onChange={(e) => setCidrs(e.target.value)} disabled={!cidrsReady || cidrsSaving} placeholder="留空表示无额外例外" className="min-w-0 flex-1 rounded bg-s3 px-2 py-1 text-[12.5px] text-on" />
+                <Button disabled={!cidrsReady || cidrsSaving} className="rounded bg-s3 px-3 py-1 text-[12.5px] text-on disabled:opacity-50" onClick={() => {
+                  setCidrsSaving(true);
+                  void api.securityCidrsSet(cidrs).then((saved) => { setCidrs(saved); toast("CIDR 例外已保存", "ok"); })
+                    .catch((e) => toast((e as Error).message || "CIDR 例外保存失败", "info"))
+                    .finally(() => setCidrsSaving(false));
+                }}>保存</Button>
+              </div>
+            </div>}
             {/* 打不开时先点这里：把 DNS / 代理 / HTTP 结果复制给维护者 */}
             <Button disabled={diagnosing} onClick={async () => {
               setDiagnosing(true);

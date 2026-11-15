@@ -219,6 +219,7 @@ async function seekChecks(page, legacy) {
 
   if (!legacy) await speedMenuKeyboardChecks(page, false);
 
+  await page.mouse.move(450, 480);
   await page.getByRole("button", { name: "暂停", exact: true }).click();
   await clickProgress(page, .6);
   logs = await waitLog(page, "seek.ready");
@@ -345,6 +346,7 @@ async function lifecyclePlayerCheck(page, legacy) {
     assert(!logs.some(e => e.event === "hlsFragLoading"), "Hidden manifest must not start fragment loading");
     await page.evaluate(() => window.playerSeekFixture.setActive(true));
     await page.waitForFunction(() => document.querySelector("video").currentTime > 1 && !document.querySelector("video").paused);
+    await page.mouse.move(450, 480); // Wake controls after the intentionally delayed manifest.
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await page.evaluate(() => window.playerSeekFixture.setActive(false));
     await page.waitForFunction(() => !window.playerSeekFixture.engineState().loading);
@@ -426,6 +428,12 @@ async function proxyRecoveryCheck(page) {
       await page.evaluate(() => window.dispatchEvent(new Event("hg:proxy-changed")));
       await page.waitForFunction(before => window.playerSeekFixture.logs.filter(e => e.event === "proxy.restored").length > before, playingRetries);
       await page.waitForFunction(time => !document.querySelector("video").paused && document.querySelector("video").currentTime >= time, playingAt);
+      if (!legacy) {
+        await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+        const progress = await page.evaluate(() => JSON.parse(localStorage.getItem("hghubx_app_v1")).progress[991]);
+        assert.equal(progress.ep, 1, "Proxy reload must retain the saved episode");
+        assert(progress.t >= playingAt, "Proxy reload must not overwrite watch progress with zero");
+      }
       const logs = await getLogs(page);
       const current = logs.filter(e => e.data.video_id).map(e => e.data.video_id);
       assert(current.every(id => id === 991), "Proxy save must retain current video");

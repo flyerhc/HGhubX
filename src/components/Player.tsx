@@ -2,14 +2,17 @@ import { Button, Input } from "./ios/controls";
 import { Loader } from "./ios/effects";
 import React, { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-import { fmtTime, platform, playlist } from "../api";
+import { attachPlaybackCache, attachDirectCache, type CacheRange } from "../playbackCache";
+import { attachSubtitles } from "../subtitles";
+import { useStore } from "../store";
+import { fmtTime, platform, mediaUrl } from "../api";
 import { mediaErrorMessage } from "../mediaErrors";
 import { mediaHost, mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
 import { useProxyPlaybackRecovery } from "../useProxyPlaybackRecovery";
 import { useSeekInput } from "../useSeekInput";
 import PlaybackLock from "./PlaybackLock";
-import { ICompress, IExpand, ILockF, IPauseF, IPlayF, IVol, IVolMute } from "../icons";
+import { ISubtitles, ICompress, IExpand, ILockF, IPauseF, IPlayF, IVol, IVolMute } from "../icons";
 
 type Props = {
   src: string;              // 原始 m3u8 地址
@@ -31,6 +34,8 @@ export default function Player({
   src, poster, autoPlay, active = true, muted = false, loop = false, onEnded, onPlaying,
   onTogglePlay, onToggleMute, controls = true, className = "", diagnosticContext = {},
 }: Props) {
+  const { subtitlesEnabled, setSubtitlesEnabled } = useStore();
+  const subtitlesRef = useRef(subtitlesEnabled); subtitlesRef.current = subtitlesEnabled;
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -41,6 +46,7 @@ export default function Player({
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [time, setTime] = useState(0);
+  const [cacheRanges, setCacheRanges] = useState<CacheRange[]>([]);
   const [duration, setDuration] = useState(0);
   const [full, setFull] = useState(false);
   const [rate, setRate] = useState(1);
@@ -66,15 +72,19 @@ export default function Player({
     const video = videoRef.current;
     if (!video || !src) return;
     setErrMsg("");
+    setCacheRanges([]);
     setWaiting(false);
     recoverCountRef.current = 0;
     const resume = proxyRecovery.resume();
-    const url = playlist(src);
+    const url = mediaUrl(src);
+    const useHls = !url.includes("/seg?u=");
+    let detachCache: (() => void) | undefined;
+    let detachSubtitles: (() => void) | undefined;
     trace("source.load", { engine: Hls.isSupported() ? "hls.js" : "native", auto_play: autoPlay, resource: mediaResource(src), host: mediaHost(src) });
 
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
-    if (Hls.isSupported()) {
+    if (useHls && Hls.isSupported()) {
       const hls = new Hls({
         // 禁用从插播/内容引导 JSON 派生直连 URL 的可选功能。
         interstitialsController: undefined,
@@ -100,6 +110,8 @@ export default function Player({
         fragLoadingRetryDelay: 400,
       });
       hlsRef.current = hls;
+      detachCache = attachPlaybackCache(hls, video, activity.isActive, setCacheRanges, undefined, () => subtitlesRef.current);
+      detachSubtitles = attachSubtitles(video, hls, () => subtitlesRef.current);
       observeHls(hls, trace);
       hls.loadSource(url);
       hls.attachMedia(video);
@@ -142,12 +154,16 @@ export default function Player({
       });
     } else {
       // Safari / 部分 WebView 原生支持 HLS
+      detachSubtitles = attachSubtitles(video, null, () => subtitlesRef.current);
+      detachCache = useHls ? attachPlaybackCache(null, video, activity.isActive, setCacheRanges, url, () => subtitlesRef.current) : attachDirectCache(url, video, activity.isActive, setCacheRanges);
       video.src = url;
       if (autoPlay && !resume) activity.play("native_autoplay", true);
     }
 
     return () => {
       trace("source.cleanup");
+      detachCache?.();
+      detachSubtitles?.();
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
   }, [src, autoPlay, proxyRecovery.revision]);
@@ -157,6 +173,8 @@ export default function Player({
     if (!video) return;
     video.muted = muted;
   }, [muted]);
+
+  useEffect(() => { videoRef.current?.dispatchEvent(new Event("subtitle-preference")); }, [subtitlesEnabled]);
 
   // iOS 内联播放：部分 WKWebView 只认 HTML 属性，不认 React 的 playsInline
   useEffect(() => {
@@ -247,8 +265,13 @@ export default function Player({
 
       {controls && (
         <div className="player-inline-controls absolute inset-x-0 bottom-0 px-3 pb-2 pt-8 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="relative">
+            <div className="absolute inset-x-0 top-1/2 h-[3px] pointer-events-none">
+              {cacheRanges.map((r, i) => <span key={i} className="absolute h-full bg-primary/40" style={{ left: `${duration ? r.start / duration * 100 : 0}%`, width: `${duration ? (r.end - r.start) / duration * 100 : 0}%` }} />)}
+            </div>
           <Input aria-label="播放进度" type="range" {...seek.inputProps}
             className="hg-range w-full" style={{ ...seek.inputProps.style, "--fill": `${pct}%` } as React.CSSProperties} />
+          </div>
           <div className="flex items-center gap-3 mt-1 text-white">
             <Button onClick={toggle} aria-label={playing ? "暂停" : "播放"} className="pressable">
               {playing ? <IPauseF size={16} /> : <IPlayF size={16} />}
@@ -258,6 +281,8 @@ export default function Player({
             </Button>
             <span className="text-[12px] tabular-nums text-white/85">{fmtTime(seek.time)} / {fmtTime(duration)}</span>
             <div className="flex-1" />
+            <Button aria-label="字幕" aria-pressed={subtitlesEnabled} title={subtitlesEnabled ? "关闭字幕" : "显示字幕"}
+              onClick={() => setSubtitlesEnabled(!subtitlesEnabled)} className="pressable"><ISubtitles size={20} /></Button>
             <Button onClick={() => setControlsLocked(true)} aria-label="锁定播放控制" title="锁定播放控制" aria-pressed={false} className="pressable">
               <ILockF size={16} />
             </Button>

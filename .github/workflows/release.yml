@@ -22,12 +22,16 @@ on:
         type: string
         default: ""
 
+permissions:
+  contents: read
+
 concurrency:
   group: release-${{ github.ref }}-${{ github.event_name }}-${{ github.run_id }}
   cancel-in-progress: true
 
 env:
   CI: "true"
+  RELEASE_TAG: ${{ inputs.tag }}
 
 jobs:
   # ================= Windows：NSIS 安装包 + 便携包 =================
@@ -48,8 +52,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF_NAME#v}"
-          elif [[ -n "${{ inputs.tag }}" ]]; then
-            V="${{ inputs.tag }}"
+          elif [[ -n "$RELEASE_TAG" ]]; then
+            V="$RELEASE_TAG"
             V="${V#v}"
           else
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
@@ -119,8 +123,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF_NAME#v}"
-          elif [[ -n "${{ inputs.tag }}" ]]; then
-            V="${{ inputs.tag }}"
+          elif [[ -n "$RELEASE_TAG" ]]; then
+            V="$RELEASE_TAG"
             V="${V#v}"
           else
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
@@ -195,7 +199,9 @@ jobs:
           if [ -z "${KEYSTORE_BASE64:-}" ]; then
             echo "::error::缺少 ANDROID_KEY_BASE64 secret，无法签名"; exit 1
           fi
+          umask 077
           KS="$RUNNER_TEMP/release.keystore"
+          trap 'rm -f "$KS"' EXIT
           echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
           BT="$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/$BT/apksigner"
@@ -243,8 +249,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF_NAME#v}"
-          elif [[ -n "${{ inputs.tag }}" ]]; then
-            V="${{ inputs.tag }}"
+          elif [[ -n "$RELEASE_TAG" ]]; then
+            V="$RELEASE_TAG"
             V="${V#v}"
           else
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
@@ -321,8 +327,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF_NAME#v}"
-          elif [[ -n "${{ inputs.tag }}" ]]; then
-            V="${{ inputs.tag }}"
+          elif [[ -n "$RELEASE_TAG" ]]; then
+            V="$RELEASE_TAG"
             V="${V#v}"
           else
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
@@ -396,8 +402,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF_NAME#v}"
-          elif [[ -n "${{ inputs.tag }}" ]]; then
-            V="${{ inputs.tag }}"
+          elif [[ -n "$RELEASE_TAG" ]]; then
+            V="$RELEASE_TAG"
             V="${V#v}"
           else
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
@@ -529,8 +535,13 @@ jobs:
 
       - name: 取版本说明
         id: notes
+        env:
+          RELEASE_TAG: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
+          TAG="$RELEASE_TAG"
+          if [[ ! "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]]; then
+            echo "::error::Invalid release tag"; exit 1
+          fi
           F="docs/release-notes/${TAG}.md"
           if [ -f "$F" ]; then
             echo "body_path=$F" >> "$GITHUB_OUTPUT"

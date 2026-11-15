@@ -3,6 +3,9 @@ name: iOS check (unsigned ipa)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   ios:
     name: iOS build only

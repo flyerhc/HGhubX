@@ -557,6 +557,18 @@ pub async fn security_set(strict: bool) -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn security_cidrs_get() -> String {
+    crate::network_policy::allowed_cidrs()
+}
+
+#[tauri::command]
+pub async fn security_cidrs_set(cidrs: String) -> Result<String, String> {
+    let saved = crate::network_policy::set_allowed_cidrs(&cidrs)?;
+    crate::net::refresh_client();
+    Ok(saved)
+}
+
+#[tauri::command]
 pub async fn api_login(
     state: State<'_, Api>,
     username: String,
@@ -943,8 +955,59 @@ pub async fn api_follow(state: State<'_, Api>, uid: i64, on: bool) -> Result<Val
 #[tauri::command]
 pub async fn cache_clear() -> Result<(), String> {
     crate::media::clear_caches();
+    crate::media_cache::clear()?;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn playback_cache_status() -> Value {
+    let (max_mib, bytes) = crate::media_cache::status();
+    json!({"max_mib": max_mib, "bytes": bytes, "revision": crate::media_cache::revision()})
+}
+#[tauri::command]
+pub async fn playback_cache_set(max_mib: u32) -> Result<(), String> { crate::media_cache::set_limit(max_mib) }
+#[tauri::command]
+pub async fn playback_cache_contains(urls: Vec<String>) -> Vec<bool> {
+    urls.iter().map(|url| crate::media_cache::contains(url)).collect()
+}
+#[tauri::command]
+pub async fn playback_cache_prefetch(url: String, range: Option<crate::media::ByteRange>, validator: Option<String>, protected_urls: Vec<String>, session_id: String, focus: Option<u64>) -> Result<bool, String> {
+    let Some(mut cancelled) = crate::media_cache::session(&session_id) else { return Ok(false) };
+    if *cancelled.borrow() { return Ok(false); }
+    tokio::select! {
+        biased;
+        _ = cancelled.changed() => Ok(false),
+        result = async {
+            let _permit = crate::media_cache::PREFETCH_SLOT.acquire().await.map_err(|_| "缓存调度已关闭")?;
+            crate::media::prefetch_segment(&url, range, validator.as_deref(), &protected_urls, focus).await
+        } => result,
+    }
+}
+#[tauri::command]
+pub async fn playback_cache_observed(urls: Vec<String>) -> Option<usize> { crate::media::latest_playlist(&urls) }
+#[tauri::command]
+pub async fn playback_cache_probe(url: String, session_id: String) -> Result<Value, String> {
+    let Some(mut cancelled) = crate::media_cache::session(&session_id) else { return Err("预缓存任务已取消".into()) };
+    tokio::select! {
+        biased;
+        _ = cancelled.changed() => Err("预缓存任务已取消".into()),
+        result = async {
+            let _permit = crate::media_cache::PREFETCH_SLOT.acquire().await.map_err(|_| "缓存调度已关闭")?;
+            let (total, tag) = crate::media::probe_direct(&url, false).await?;
+            Ok(json!({"total": total, "tag": tag}))
+        } => result,
+    }
+}
+#[tauri::command]
+pub async fn playback_cache_cursor(url: String) -> u64 { crate::media::direct_cursor(&url) }
+#[tauri::command]
+pub async fn playback_cache_pending(url: String) -> Value { json!(crate::media::direct_pending(&url)) }
+#[tauri::command]
+pub async fn playback_cache_ready(session_id: String, ready: bool) { crate::media_cache::buffer_ready(&session_id, ready); }
+#[tauri::command]
+pub async fn playback_cache_start(session_id: String) -> Result<(), String> { crate::media_cache::start_session(session_id) }
+#[tauri::command]
+pub async fn playback_cache_stop(session_id: String) { crate::media_cache::cancel_session(&session_id); }
 
 /* ───────────────────────── 吃瓜帖子互动 ───────────────────────── */
 

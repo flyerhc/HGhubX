@@ -428,23 +428,22 @@ fn client_key(strict: bool, host: &str, port: u16, public_dns: bool, route: &Pro
 }
 
 async fn client_for_dns(raw: &str, public_dns: bool) -> Result<(url::Url, Arc<reqwest::Client>), String> {
+    let generation = CLIENT_GENERATION.load(Ordering::Acquire);
     let strict = network_policy::strict_security();
     let target = network_policy::parse_target_with_mode(raw, strict)?;
     let host = target.host_str().ok_or("目标缺少主机名")?;
     let port = target.port_or_known_default().ok_or("目标端口无效")?;
     let route = ProxyRoute::for_config(&crate::proxy::snapshot(), &target);
-    let proxy = route.active;
     let key = client_key(strict, host, port, public_dns, &route);
     {
         let cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
         if let Some(http) = cached_client(&cache, &key, Instant::now()) {
+            if CLIENT_GENERATION.load(Ordering::Acquire) != generation { return Err("网络策略已变化，请重试".into()); }
             return Ok((target, http));
         }
     }
-    let (addrs, ttl) = if proxy {
-        // 有代理：跳过本地解析与 IP 校验，addrs 留空，域名交给代理。
-        (Vec::new(), CLIENT_TTL)
-    } else if public_dns {
+    // Preserve strict DNS checks even when a proxy is configured.
+    let (addrs, ttl) = if public_dns {
         let resolver = build_client(crate::media_dns::HOST, &crate::media_dns::BOOTSTRAP, &route)?;
         let resolution = crate::media_dns::resolve(&resolver, host, port).await?;
         network_policy::check_addresses_with_mode(&resolution.addresses, strict)?;
@@ -455,8 +454,10 @@ async fn client_for_dns(raw: &str, public_dns: bool) -> Result<(url::Url, Arc<re
         (Vec::new(), CLIENT_TTL)
     };
     let http = Arc::new(build_client(host, &addrs, &route)?);
+    if CLIENT_GENERATION.load(Ordering::Acquire) != generation { return Err("网络策略已变化，请重试".into()); }
     let now = Instant::now();
     let mut cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
+    if CLIENT_GENERATION.load(Ordering::Acquire) != generation { return Err("网络策略已变化，请重试".into()); }
     // 同时到达的请求可能已完成解析；不延长已有结果的有效期。
     let http = cached_client(&cache, &key, now).unwrap_or(http);
     if !cache.get(&key).is_some_and(|(expires, _)| now < *expires) {
@@ -487,8 +488,29 @@ pub async fn get(
     accept: Option<&str>,
     referer: Option<&str>,
 ) -> Result<reqwest::Response, String> {
-    get_with_dns(raw, timeout, accept, referer, false).await
+    get_with_dns(raw, timeout, accept, referer, false, None).await
 }
+
+pub async fn get_with_range(
+    raw: &str, timeout: Duration, accept: Option<&str>, referer: Option<&str>, range: Option<&str>,
+) -> Result<reqwest::Response, String> {
+    let target = network_policy::parse_target(raw)?;
+    let host = target.host_str().ok_or("目标缺少主机名")?;
+    let public_dns = MEDIA_DNS_ROUTES.lock().map(|routes| routes.prefers_public(host, Instant::now())).unwrap_or(false);
+    let first = get_with_dns(raw, timeout, accept, referer, public_dns, range).await;
+    match first {
+        Err(error) if crate::media_dns::eligible(&target, &error) => {
+            let result = get_with_dns(raw, timeout, accept, referer, !public_dns, range).await;
+            if let Ok(mut routes) = MEDIA_DNS_ROUTES.lock() {
+                if result.is_ok() && !public_dns { routes.remember(host, Instant::now()); }
+                else { routes.forget(host); }
+            }
+            result
+        }
+        result => result,
+    }
+}
+
 
 async fn get_with_dns(
     raw: &str,
@@ -496,6 +518,7 @@ async fn get_with_dns(
     accept: Option<&str>,
     referer: Option<&str>,
     public_dns: bool,
+    range: Option<&str>,
 ) -> Result<reqwest::Response, String> {
     tokio::time::timeout(timeout, async {
         let policy_error = |phase: &str, error: String| {
@@ -514,6 +537,7 @@ async fn get_with_dns(
             if let Some(value) = referer {
                 request = request.header("Referer", value);
             }
+            if let Some(value) = range { request = request.header(reqwest::header::RANGE, value).header(reqwest::header::ACCEPT_ENCODING, "identity"); }
             let response = request.send().await.map_err(|e| err_text(&e))?;
             if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
                 return Ok(response);
@@ -1403,7 +1427,7 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
             let mut status = None;
             let mut headers_ms = None;
             let result = async {
-                let resp = get_with_dns(&url, Duration::from_secs(20), None, Some(&referer), using_public_dns).await?;
+                let resp = get_with_dns(&url, Duration::from_secs(20), None, Some(&referer), using_public_dns, None).await?;
                 status = Some(resp.status().as_u16());
                 headers_ms = Some(started.elapsed().as_millis() as u64);
                 if !resp.status().is_success() {

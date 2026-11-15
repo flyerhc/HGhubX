@@ -13,6 +13,10 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod media;
+mod media_cache;
+mod media_download;
+#[cfg(test)]
+mod playback_test_server;
 mod media_dns;
 mod net;
 mod network_policy;
@@ -55,6 +59,39 @@ fn allowed_frontend_origin(origin: &str) -> bool {
         })
 }
 
+fn allowed_navigation(url: &url::Url, strict: bool) -> bool {
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    // "null" is needed for media CORS on opaque WebView origins, but must
+    // never authorize navigation to data:, file:, javascript: or other schemes.
+    match url.scheme() {
+        "tauri" => url.host_str() == Some("localhost"),
+        "http" | "https" => {
+            !strict || allowed_frontend_origin(&url.origin().ascii_serialization())
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    #[test]
+    fn opaque_media_origins_do_not_authorize_navigation() {
+        for raw in ["data:text/html,<script>alert(1)</script>", "file:///etc/passwd", "javascript:alert(1)", "tauri://evil/index.html", "about:blank"] {
+            let url = url::Url::parse(raw).unwrap();
+            assert!(!super::allowed_navigation(&url, true), "{raw}");
+            assert!(!super::allowed_navigation(&url, false), "{raw}");
+        }
+        for raw in ["tauri://localhost/index.html", "http://tauri.localhost/index.html", "https://tauri.localhost/"] {
+            assert!(super::allowed_navigation(&url::Url::parse(raw).unwrap(), true), "{raw}");
+        }
+        let external = url::Url::parse("https://example.com/").unwrap();
+        assert!(!super::allowed_navigation(&external, true));
+        assert!(super::allowed_navigation(&external, false));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -92,6 +129,7 @@ pub fn run() {
                 // 上次选择的线路（设置 → 线路）在启动时恢复
                 net::bind_base(&dir);
                 playback_log::bind(&dir);
+                media_cache::bind(&dir);
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }
@@ -113,14 +151,7 @@ pub fn run() {
                     let _ = webview;
                 })
                 .on_navigation(|_webview, url| {
-                    let host = url.host_str().unwrap_or("");
-                    (url.scheme() == "tauri" && host == "localhost")
-                        // Android 上自定义协议表现为 http://<scheme>.localhost，WebView 有时把它
-                        // 当成一次导航进来。这是进程内的媒体代理地址，不出网，严格模式也不该拦。
-                        || (matches!(url.scheme(), "http" | "https") && host.ends_with(".localhost"))
-                        || allowed_frontend_origin(&url.origin().ascii_serialization())
-                        || (!network_policy::strict_security()
-                            && matches!(url.scheme(), "http" | "https"))
+                    allowed_navigation(url, network_policy::strict_security())
                 })
                 .build(),
         )
@@ -159,6 +190,7 @@ pub fn run() {
                 );
                 return;
             }
+            let range = request.headers().get("Range").and_then(|v| v.to_str().ok()).map(str::to_string);
             let uri = request.uri().clone();
             let path = uri.path().to_string();
             let query = uri.query().unwrap_or("").to_string();
@@ -166,7 +198,7 @@ pub fn run() {
             // （Windows/Android 是 http://<scheme>.localhost，macOS/iOS/Linux 是 <scheme>://localhost）。
             // 它同时是 m3u8 分片/key 改写用的前缀，必须与前端 src/api.ts 的 LOCAL 一致。
             tauri::async_runtime::spawn(async move {
-                let mut resp = media::handle(&path, &query, media::LOCAL_ORIGIN).await;
+                let mut resp = media::handle(&path, &query, media::LOCAL_ORIGIN, range.as_deref()).await;
                 if let Some(origin) =
                     request_origin.and_then(|s| tauri::http::HeaderValue::from_str(&s).ok())
                 {
@@ -223,6 +255,20 @@ pub fn run() {
             api::api_search,
             api::api_search_hot,
             api::cache_clear,
+            api::playback_cache_status,
+            api::playback_cache_set,
+            api::playback_cache_contains,
+            api::playback_cache_prefetch,
+            api::playback_cache_observed,
+            api::playback_cache_probe,
+            api::playback_cache_cursor,
+            api::playback_cache_pending,
+            api::playback_cache_ready,
+            api::playback_cache_start,
+            api::playback_cache_stop,
+            api::security_cidrs_get,
+            api::security_cidrs_set,
+
             api::api_posts,
             api::api_post,
             api::api_post_playback,

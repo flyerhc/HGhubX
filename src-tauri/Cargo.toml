@@ -45,6 +45,8 @@ aes = "0.8"
 base64 = "0.22"
 percent-encoding = "2"
 once_cell = "1"
+ipnet = "2"
+sha2 = "0.10"
 url = "2"
 
 # Tauri already uses this WebKitGTK version/features; reuse it to configure only

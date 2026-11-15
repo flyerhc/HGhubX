@@ -128,3 +128,5 @@ export const IGlobe = S(
     <path d="M12 3.2c2.6 2.4 4 5.5 4 8.8s-1.4 6.4-4 8.8c-2.6-2.4-4-5.5-4-8.8s1.4-6.4 4-8.8Z" />
   </>,
 );
+
+export const ISubtitles = S(<><rect x="2.5" y="5" width="19" height="14" rx="2.5" /><path d="M6 10h3M12 10h6M6 14h6M15 14h3" /></>);

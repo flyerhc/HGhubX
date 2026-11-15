@@ -2,16 +2,20 @@ import { Button, Input } from "./ios/controls";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { fmtTime } from "../api";
 import { useSeekInput } from "../useSeekInput";
-import { ICheck, ICompress, IExpand, ILockF, INext, IPauseF, IPip, IPlayF, ITheater, IVertSwap, IVol, IVolMute } from "../icons";
+import { ICheck, ISubtitles, ICompress, IExpand, ILockF, INext, IPauseF, IPip, IPlayF, ITheater, IVertSwap, IVol, IVolMute } from "../icons";
 import type { PlaybackClock } from "../playbackClock";
+import type { CacheRange } from "../playbackCache";
 
 type Props = {
   paused: boolean;
   clock: PlaybackClock;
   duration: number;
   buffered?: number;
+  cacheRanges?: CacheRange[];
   rate: number;
   muted: boolean;
+  subtitlesEnabled: boolean;
+  onSubtitles: () => void;
   volume: number;
   theater?: boolean;
   fullscreen?: boolean;
@@ -38,7 +42,7 @@ type Props = {
 const formatClock = (s: number) => fmtTime(Math.max(0, s || 0)).padStart(5, "0");
 
 export default function PlayerControls({
-  paused, clock, duration, buffered = 0, rate, muted, volume, theater = false, fullscreen = false,
+  paused, clock, duration, buffered = 0, cacheRanges = [], subtitlesEnabled, onSubtitles, rate, muted, volume, theater = false, fullscreen = false,
   visible = true, seekEnabled = true, seekKey, nextDisabled = false, nextTitle = "下一个", swipeEp = false, onToggle, onSeek, onSeekInteraction, onRate, onMute, onVolume, onPip, onLock, onTheater, onFullscreen, onNext, onToggleSwipe,
 }: Props) {
   const [speedOpen, setSpeedOpen] = useState(false);
@@ -66,6 +70,7 @@ export default function PlayerControls({
       <div className={`desktop-seek ${seekEnabled ? "is-seekable" : ""}`}>
         <div className="desktop-seek-track">
           <span className="desktop-seek-buffer" style={{ width: `${Math.min(1, buffered) * 100}%` }} />
+          {cacheRanges.map((r, i) => <span key={i} className="absolute h-full bg-primary/40" style={{ left: `${duration ? r.start / duration * 100 : 0}%`, width: `${duration ? (r.end - r.start) / duration * 100 : 0}%` }} />)}
           <span className="desktop-seek-played" style={{ width: `${pct}%` }} />
         </div>
         <Input aria-label="播放进度" type="range" {...seek.inputProps} />
@@ -132,6 +137,8 @@ export default function PlayerControls({
               onChange={(e) => onVolume(Number(e.target.value))} />
           </div>
         </div>
+        <Button className={`player-control ${subtitlesEnabled ? "is-on" : ""}`} aria-label="字幕" aria-pressed={subtitlesEnabled}
+          data-tooltip={subtitlesEnabled ? "关闭字幕" : "显示字幕"} onClick={onSubtitles}><ISubtitles size={21} strokeWidth={1.6} /></Button>
         <Button className="player-control" aria-label="画中画" data-tooltip="画中画" onClick={onPip}><IPip size={20} strokeWidth={1.6} /></Button>
         <Button className="player-control" aria-label="锁定播放控制" aria-pressed={false} data-tooltip="锁定播放控制" onClick={onLock}><ILockF size={18} /></Button>
         {!fullscreen && onTheater && (
