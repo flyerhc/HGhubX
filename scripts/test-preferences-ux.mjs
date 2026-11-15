@@ -17,6 +17,28 @@ const openFeed = async page => { await page.evaluate(() => window.preferencesUXF
 const inside = (r, width, height) => r.left >= -1 && r.top >= -1 && r.right <= width + 1 && r.bottom <= height + 1;
 const bounds = async locator => locator.evaluate(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; });
 const actionable = async locator => locator.evaluate(el => { const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return el.contains(hit); });
+const settledMenuLayout = async dialog => dialog.evaluate(async element => {
+  await document.fonts.ready;
+  return new Promise((resolve, reject) => {
+    let previous, stableFrames = 0, frame;
+    const timeout = setTimeout(() => { cancelAnimationFrame(frame); reject(new Error("Tag menu layout did not settle within 6000ms")); }, 6000);
+    const measure = () => {
+      // A DOM count reflects React's expansion commit, not completion of the
+      // browser's layout/scroll anchoring. Observe the body and fixed footer too.
+      const nodes = [element, element.querySelector(".content-tag-menu"), element.querySelector("[data-tag-menu-scroll]"), element.querySelector(".content-tag-menu-footer")];
+      const current = nodes.flatMap(node => {
+        if (!node) return [NaN];
+        const r = node.getBoundingClientRect();
+        return [r.left, r.top, r.width, r.height, node.scrollTop, node.scrollHeight, node.clientHeight];
+      });
+      stableFrames = previous && current.length === previous.length && current.every((value, index) => Number.isFinite(value) && Math.abs(value - previous[index]) < .05) ? stableFrames + 1 : 0;
+      previous = current;
+      if (stableFrames >= 2) { clearTimeout(timeout); resolve(current); return; }
+      frame = requestAnimationFrame(measure);
+    };
+    frame = requestAnimationFrame(measure);
+  });
+});
 let browser, server;
 try {
   server = await createServer({ root, server: { host: "127.0.0.1", port: 0, strictPort: false } }); await server.listen();
@@ -119,19 +141,25 @@ try {
       await dialog.getByRole("button", { name: "全部标签（40）", exact: true }).click();
       assert.equal(await dialog.getByRole("button", { name: lastTag, exact: true }).getAttribute("aria-pressed"), "true");
     }
+    await settledMenuLayout(dialog);
     const before = { dialog: await bounds(dialog), close: await bounds(close), confirm: await bounds(confirm) };
+    const measurement = { name: `menu-${viewport.width}`, compact, before, after: null, scrollBefore: null, scrollAfter: null };
+    report.measurements.push(measurement);
     for (const [label, r] of Object.entries(before)) assert(inside(r, viewport.width, viewport.height), `${label} stays inside viewport`);
     assert(await actionable(close) && await actionable(confirm), "Header/footer controls are not covered before scrolling");
     assert(before.close.height >= 44 && before.confirm.height >= 44, "Close and confirm have >=44px targets");
     const scroll = dialog.locator("[data-tag-menu-scroll]");
     assert(await scroll.evaluate(el => el.scrollHeight > el.clientHeight), "Many tags scroll only in the tag body");
+    measurement.scrollBefore = await scroll.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight, clientHeight: el.clientHeight }));
     await scroll.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await settledMenuLayout(dialog);
     const after = await bounds(confirm);
+    measurement.after = { dialog: await bounds(dialog), close: await bounds(close), confirm: after };
+    measurement.scrollAfter = await scroll.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight, clientHeight: el.clientHeight }));
     assert(Math.abs(after.top - before.confirm.top) < 1, "Confirm remains fixed when tags scroll");
     assert(await actionable(close) && await actionable(confirm), "Header/footer remain usable after scrolling");
     assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1), "Long unbroken tags stay in dialog width");
     assert.equal(await page.getByRole("dialog").count(), 1);
-    report.measurements.push({ name: `menu-${viewport.width}`, compact, before, after });
     await page.screenshot({ path: `${out}/menu-${viewport.width}-scrolled.png`, animations: "disabled" });
     await page.keyboard.press("Escape"); await dialog.waitFor({ state: "hidden" });
     assert.equal(await opener.evaluate(el => !!el.closest("[inert]")), false, "Closing the menu restores background interaction");
