@@ -22,6 +22,7 @@ const suites = [
   ['home-mobile', ['scripts/test-home-scheduling.mjs'], { HOME_UI_MOBILE: '1' }],
   ['reading', ['scripts/test-reading-selection.mjs']],
   ['player-panels', ['scripts/test-player-panels.mjs']],
+  ['mobile-hold-guide', ['scripts/test-mobile-hold-guide.mjs']],
   ['content-preferences', ['scripts/test-content-preferences-core.mjs']],
   ['filtered-lists', ['scripts/test-content-filter-lists.mjs']],
   ['tag-feed', ['scripts/test-tag-feed.mjs']],

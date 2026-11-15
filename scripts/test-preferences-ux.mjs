@@ -9,6 +9,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const out = fileURLToPath(new URL(`../test-results/preferences-ux/${Date.now()}/`, import.meta.url));
 await mkdir(out, { recursive: true });
 const key = (await readFile(`${root}src/contentPreferences.ts`, "utf8")).match(/CONTENT_PREFERENCES_KEY\s*=\s*"([^"]+)"/)[1];
+const holdGuideKey = (await readFile(`${root}src/useMobileHoldGuide.ts`, "utf8")).match(/MOBILE_HOLD_GUIDE_KEY\s*=\s*"([^"]+)"/)[1];
 const report = { environment: "Real App/Feed/Settings with neutral mocked IPC, no upstream/media traffic or native-device claim", passed: [], failed: [], errors: [], measurements: [] };
 const state = page => page.evaluate(() => window.preferencesUXFixture.state);
 const menu = page => page.getByRole("dialog", { name: "不感兴趣", exact: true });
@@ -25,7 +26,7 @@ try {
     if (process.env.PREFERENCES_UX_CASE && process.env.PREFERENCES_UX_CASE !== name) return;
     const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce", colorScheme: theme,
       ...(!desktop ? { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148", isMobile: true, hasTouch: true } : {}) });
-    await context.addInitScript(({ key, theme, paused }) => { localStorage.clear(); localStorage.setItem("hghubx_theme", theme); localStorage.setItem("hghubx_auto_line", "off"); localStorage.setItem(key, JSON.stringify({ blockedTags: [], paused, hideUntagged: false })); }, { key, theme, paused });
+    await context.addInitScript(({ key, holdGuideKey, theme, paused }) => { localStorage.clear(); localStorage.setItem(holdGuideKey, "1"); localStorage.setItem("hghubx_theme", theme); localStorage.setItem("hghubx_auto_line", "off"); localStorage.setItem(key, JSON.stringify({ blockedTags: [], paused, hideUntagged: false })); }, { key, holdGuideKey, theme, paused });
     if (fakeMedia) await context.addInitScript(() => {
       const paused = new WeakMap();
       window.fakeMediaCalls = { play: 0, pause: 0 };

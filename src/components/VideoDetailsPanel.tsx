@@ -27,7 +27,7 @@ export default function VideoDetailsPanel({ meta, videoId, episodeCount, related
     </div>}
     <div className="video-details-scroll scroll-y">
       <div className="video-details-overview">
-        <Surface className="video-details-cover"><Img src={meta.cover} loadingIndicator alt={meta.title} /></Surface>
+        <Surface className="video-details-cover"><Img src={meta.cover} eager loadingIndicator alt={meta.title} /></Surface>
         <div className="video-details-copy">
           <h3>{meta.title}</h3>
           <div className="video-details-stats">

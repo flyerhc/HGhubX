@@ -1,5 +1,5 @@
 import { Button, Image, Surface } from "./ios/controls";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { cover, platform } from "../api";
 export { Sheet, Modal } from "./ios/overlays";
 import { useStore } from "../store";
@@ -117,15 +117,20 @@ export function ToastHost() {
 export function Img({ src, alt = "", className = "", eager = false, raw = false, loadingIndicator = false }: {
   src: string; alt?: string; className?: string; eager?: boolean; raw?: boolean; loadingIndicator?: boolean;
 }) {
+  const url = raw ? src : cover(src);
+  // 每个地址独立持有状态，避免换图后的 effect 把缓存命中的 onLoad 重置掉。
+  return <ImageLoad key={url} url={url} alt={alt} className={className} eager={eager} raw={raw} loadingIndicator={loadingIndicator} />;
+}
+
+function ImageLoad({ url, alt, className, eager, raw, loadingIndicator }: {
+  url: string; alt: string; className: string; eager: boolean; raw: boolean; loadingIndicator: boolean;
+}) {
   const [ok, setOk] = useState(false);
   const [err, setErr] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const url = raw ? src : cover(src);
   /* 封面走本地解密代理，网络抖动会偶发失败：同地址重试两次再落到占位。
      代理入口只读 `u`，多余查询参数会被忽略，用它做重试的缓存戳。 */
   const retryUrl = !url || raw || attempt === 0 ? url : `${url}${url.includes("?") ? "&" : "?"}r=${attempt}`;
-  /* 换图（含列表滚动复用同组件）时重置重试计数，避免上一张图的失败次数污染新图。 */
-  useEffect(() => { setOk(false); setErr(false); setAttempt(0); }, [url]);
   return (
     <div className={`ios-image absolute inset-0 overflow-hidden ${className}`} data-ui="image-frame">
       {!ok && !err && <div className="absolute inset-0 shimmer" />}

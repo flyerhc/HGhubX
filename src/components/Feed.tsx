@@ -18,6 +18,9 @@ import { createPlaybackClock } from "../playbackClock";
 import { useContentPreferences } from "../contentPreferences";
 import { TagBlockMenu } from "./TagBlockMenu";
 import VideoDetailsPanel from "./VideoDetailsPanel";
+import MobileHoldGuide from "./MobileHoldGuide";
+import { getHoldZone, HOLD_DELAY_MS, HOLD_LOCK_DISTANCE, type HoldZone } from "../mobileHold";
+import { useMobileHoldGuide } from "../useMobileHoldGuide";
 import {
   IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IFileText, IHeart, IHeartF, IMore,
   ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
@@ -43,6 +46,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const store = useStore();
   const { isLiked, isFav, setLiked, setCollected, setFollowing, actionPending, accountScope, muted, setMuted, volume, setVolume, toast, addHistory, user, setLoginOpen, swipeEp, setSwipeEp, preferHevc, setPreferHevc } = store;
   const isDesktop = !isMobile;
+  const holdGuide = useMobileHoldGuide();
   const contentPreferences = useContentPreferences();
   const { preferences, revision, blockReason } = contentPreferences;
   const filtering = !preferences.paused && (preferences.blockedTags.length > 0 || preferences.hideUntagged);
@@ -91,6 +95,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   const boxRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<VideoHandle>(null);
+  const holdTargetRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(() => ({ id: videoIds[startIndex], index: startIndex }));
   const index = useMemo(() => {
     if (!effectiveVideoIds.length) return -1;
@@ -183,7 +188,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const gesture = useRef<{
     x: number; y: number; startY: number; t: number; timer: number | null;
     mode: "idle" | "hold" | "scrub" | "pan"; base: number; width: number; playing: boolean;
-    zone: "fast" | "slow" | "menu";
+    zone: HoldZone;
   } | null>(null);
   /* 单击 / 双击判定：单击净屏，双击暂停 */
   const lastTapRef = useRef<{ timer: number | null; clean?: boolean; idle?: boolean }>({ timer: null });
@@ -248,6 +253,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const mainUrl = playUrls[playKey] || "";
   const hevcUrl = hevcUrls[playKey] || "";
   const playUrl = preferHevc && hevcUrl ? hevcUrl : mainUrl;
+  // 等播放画面就绪再提示，启动动画/协议、加载失败和其他面板不叠加教程。
+  const showHoldGuide = !isDesktop && !holdGuide.seen && active && allowed
+    && !!playUrl && duration > 0 && !err && !panel && !tagMenu && !controlsLocked;
   useEffect(() => {
     const retry = () => {
       setErr("");
@@ -329,7 +337,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     copyText(u).then(() => toast("链接已复制", "ok")).catch(() => toast("复制失败", "info"));
   };
 
-  /* 倍速：长按分区 → 右上 2.0x / 左下 0.5x，锁定仍为 2.0x，否则用基准倍速 */
+  /* 倍速：中心小方块打开偏好，外侧右上 2.0x / 左下 0.5x。 */
   const effRate = holdSpeed || speedLock ? 2 : holdSlow ? 0.5 : rate;
   /* 沉浸全屏 + 横屏视频 → 舞台旋转 90°，看起来就是横屏 */
   const rotated = !isDesktop && fs && vsize.w > vsize.h && vsize.h > 0 && !vpLandscape;
@@ -591,7 +599,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /* 键盘 */
   useEffect(() => {
-    if (!active || !allowed || controlsLocked) return;
+    if (!active || !allowed || controlsLocked || showHoldGuide) return;
     const seekRelative = (delta: number) => {
       const current = videoRef.current?.el()?.currentTime ?? 0;
       videoRef.current?.seek(Math.max(0, current + delta), "keyboard_shortcut");
@@ -619,7 +627,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     window.addEventListener("keydown", fn);
     return () => window.removeEventListener("keydown", fn);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, allowed, controlsLocked, panel, index, stepDir, accountScope, curEp, kind, liked, collected, likePending, collectPending]);
+  }, [active, allowed, controlsLocked, showHoldGuide, panel, index, stepDir, accountScope, curEp, kind, liked, collected, likePending, collectPending]);
 
   /* 安卓返回键：面板打开时先关面板 */
   useEffect(() => {
@@ -643,7 +651,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /* —— 长按 2x（上滑锁定） / 横拖定位 / 单击暂停 —— */
   const onDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isDesktop || controlsLocked || !active) return;
+    if (isDesktop || controlsLocked || !active || showHoldGuide) return;
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointersRef.current.size === 2) {
       const pts = [...pointersRef.current.values()];
@@ -668,10 +676,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     const el = e.currentTarget;
     const width = el.clientWidth || 1;
     const rect = el.getBoundingClientRect();
-    const nx = rect.width ? (e.clientX - rect.left) / rect.width : 0.5;
-    const ny = rect.height ? (e.clientY - rect.top) / rect.height : 0.5;
-    const diag = nx - ny;
-    const zone: "fast" | "slow" | "menu" = diag < -0.33 ? "slow" : diag > 0.33 ? "fast" : "menu";
+    // 按视觉矩形求真正的正方形；CSS 旋转全屏时也与蒙板标记重合。
+    const zone = getHoldZone(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
     try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const g = {
       x: e.clientX, y: e.clientY, startY: e.clientY, t: Date.now(), base: videoRef.current?.el()?.currentTime ?? playbackClock.getSnapshot(), width,
@@ -693,7 +699,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         setLockArmed(false);
         lockArmedRef.current = false;
         try { navigator.vibrate?.(25); } catch { /* ignore */ }
-      }, 380) as unknown as number,
+      }, HOLD_DELAY_MS) as unknown as number,
     };
     gesture.current = g;
   };
@@ -720,7 +726,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     /* 长按中：右上加速区上滑 64px 进入「松开即锁定」；减速/不感兴趣区不锁 */
     if (g.mode === "hold") {
       if (g.zone !== "fast") return;
-      const armed = g.startY - e.clientY > 64;
+      const armed = g.startY - e.clientY > HOLD_LOCK_DISTANCE;
       if (armed !== lockArmedRef.current) {
         lockArmedRef.current = armed;
         setLockArmed(armed);
@@ -827,15 +833,17 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   };
 
   useEffect(() => {
-    if (!active || controlsLocked) {
+    if (!active || controlsLocked || showHoldGuide) {
       if (!active) { setPanel(null); setTagMenu(false); }
       onUp(true);
+      pointersRef.current.clear();
+      pinchRef.current = null;
       if (lastTapRef.current.timer) window.clearTimeout(lastTapRef.current.timer);
       lastTapRef.current.timer = null;
     }
     // Cancel pending gestures when the page is hidden or controls are locked.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, controlsLocked]);
+  }, [active, controlsLocked, showHoldGuide]);
 
   useEffect(() => () => {
     if (gesture.current?.timer) window.clearTimeout(gesture.current.timer);
@@ -1151,11 +1159,12 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           return (
             <section key={vid} className={sectionClass}>
               {isActive && playUrl ? (
-                <div className="absolute inset-0" style={{ touchAction: swipeEp ? "none" : "pan-y" }}
+                <div ref={holdTargetRef} data-mobile-hold-target={!isDesktop || undefined}
+                  className="absolute inset-0" style={{ touchAction: swipeEp ? "none" : "pan-y" }}
                   onPointerDown={onDown} onPointerMove={onMove} onPointerUp={(e) => onUp(false, e)} onPointerCancel={(e) => onUp(true, e)} onLostPointerCapture={(e) => onUp(true, e)}>
                 <div style={{ position: "absolute", inset: 0, transform: isDesktop ? undefined : `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.s})`, transformOrigin: "center center", transition: isDesktop || zoom.g ? "none" : "transform .18s ease-out" }}>
-                <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay active={active && !tagMenu} muted={muted}
-                  diagnosticContext={{ active: active && !tagMenu, view: mode, kind, video_id: curId, episode: curEp }}
+                <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay active={active && !tagMenu && !showHoldGuide} muted={muted}
+                  diagnosticContext={{ active: active && !tagMenu && !showHoldGuide, view: mode, kind, video_id: curId, episode: curEp }}
                   volume={volume} rate={effRate}
                   fit={isDesktop ? "contain" : landscapeVideo ? (fs || vpLandscape ? "contain" : portraitFit) : (vpLandscape ? "contain" : "cover")}
                   onClick={() => { if (isDesktop) videoRef.current?.toggle(); }}
@@ -1663,6 +1672,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         </div>
       )}
       <TagBlockMenu open={active && tagMenu} tags={meta.tags} onClose={() => setTagMenu(false)} onSettings={openPreferences} />
+      {!isDesktop && <MobileHoldGuide open={showHoldGuide} onClose={holdGuide.dismiss} target={holdTargetRef} bottomInset={bottomInset} />}
       {controlsLocked && <PlaybackLock active={active} onUnlock={() => { setControlsLocked(false); wake(); }} />}
     </div>
   );
