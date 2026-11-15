@@ -311,7 +311,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         tags: post?.tags || [],
         score: 0,
         like: 0,
-        comment: 0,
+        comment: post?.counts?.comment ?? 0,
         collect: 0,
         episodes: [] as Episode[],
       }
@@ -1311,9 +1311,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                     {collected ? <IStarF size={27} className="hg-gold" /> : <IStar size={27} className="hg-ink hg-ov-shadow" />}
                     <span className="text-[12px] text-white/90 tabular-nums">{fmt(collectCount)}</span>
                   </Button>
-                  <Button onClick={() => setPanel("comments")} className="flex flex-col items-center gap-1 pressable" aria-label="评论">
+                  <Button onClick={() => setPanel("comments")} className="flex flex-col items-center gap-1 pressable" aria-label={`评论 ${fmt(meta.comment)} 条`}>
                     <ICommentF size={26} className="hg-ink hg-ov-shadow" />
-                    <span className="text-[12px] hg-ink-2 hg-ov-shadow">评论</span>
+                    <span className="text-[12px] hg-ink-2 hg-ov-shadow tabular-nums">{fmt(meta.comment)}</span>
                   </Button>
                   <Button onClick={() => enterFs(isLandscapeCurrent())} className="flex flex-col items-center gap-1 pressable" aria-label="全屏">
                     <IExpand size={26} className="hg-ink hg-ov-shadow" />
@@ -1348,7 +1348,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                       <span className="text-[12px] text-white/90 tabular-nums">{fmt(likeCount)}</span>
                     </Button>
 
-                    <Button onClick={() => setPanel("comments")} aria-label="评论" className="flex flex-col items-center gap-1 pressable">
+                    <Button onClick={() => setPanel("comments")} aria-label={`评论 ${fmt(meta.comment)} 条`} className="flex flex-col items-center gap-1 pressable">
                       <ICommentF size={27} className="text-white tsh" />
                       <span className="text-[12px] text-white/90 tabular-nums">{fmt(meta.comment)}</span>
                     </Button>
