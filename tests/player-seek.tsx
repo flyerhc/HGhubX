@@ -8,10 +8,6 @@ import { flushPlaybackLog, initPlaybackLog, playbackLogApi, setPlaybackLog } fro
 import Settings from "../src/pages/Settings";
 import Player from "../src/components/Player";
 import Hls from "hls.js";
-import { MOBILE_HOLD_GUIDE_KEY } from "../src/useMobileHoldGuide";
-
-// This suite exercises returning-user playback; first-use onboarding has its own fixture.
-localStorage.setItem(MOBILE_HOLD_GUIDE_KEY, "1");
 
 // 仅将自定义媒体协议映射到本地测试服务器；播放器、HLS 和鼠标事件均使用真实实现。
 const proxy = new URLSearchParams(location.search).get("proxy") || "http://127.0.0.1:17779";

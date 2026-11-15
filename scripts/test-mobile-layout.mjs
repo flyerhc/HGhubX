@@ -1,17 +1,12 @@
 // Exercise the real App and its mobile navigation; only Tauri IPC is replaced.
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { chromium } from "playwright-core";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const agreementSource = await readFile(join(root, "src/usageAgreement.ts"), "utf8");
-const agreement = {
-  key: agreementSource.match(/USAGE_AGREEMENT_KEY = "([^"]+)"/)[1],
-  version: agreementSource.match(/USAGE_AGREEMENT_VERSION = "([^"]+)"/)[1],
-};
 const output = join(root, "test-results", "mobile-layout", new Date().toISOString().replace(/[:.]/g, "-"));
 const userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1";
 const viewports = [{ width: 320, height: 694 }, { width: 390, height: 844 }, { width: 430, height: 932 }, { width: 844, height: 390 }];
@@ -28,9 +23,7 @@ try {
   const origin = vite.resolvedUrls.local[0];
   browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || undefined });
   const context = await browser.newContext({ userAgent, isMobile: true, hasTouch: true, viewport: viewports[0] });
-  await context.addInitScript(({ key, version }) => {
-    // Navigation alignment starts after this test user's explicit agreement.
-    localStorage.setItem(key, JSON.stringify({ version, accepted: true, acceptedAt: "2026-11-15T00:00:00.000Z" }));
+  await context.addInitScript(() => {
     const fixture = { calls: [], unexpected: [] };
     const emptyPage = { items: [], pagination: { page: 1, pages: 1, size: 8, total: 0 } };
     Object.assign(window, {
@@ -40,13 +33,6 @@ try {
         if (cmd === "app_boot") return Promise.resolve({ user: null, logged_in: false, base: "https://fixture.invalid", strict_security: true });
         if (cmd === "playback_log_status") return Promise.resolve({ enabled: false, path: null, error: null });
         if (cmd === "debug_log") return Promise.resolve();
-        if (cmd === "set_text_interaction") {
-          if (typeof args.enabled !== "boolean") {
-            fixture.unexpected.push(`${cmd}: enabled must be boolean`);
-            return Promise.reject("Invalid set_text_interaction.enabled");
-          }
-          return Promise.resolve(null);
-        }
         if (cmd === "line_auto") return Promise.resolve({ base: "https://fixture.invalid", previous: "https://fixture.invalid", switched: false, pick: { tier: "main", ms: 1, reason: "fixture", candidates: [] } });
         if (["api_feed", "api_category", "api_posts", "api_original_videos", "api_post_category", "api_search_hot"].includes(cmd)) return Promise.resolve(emptyPage);
         // App's development-only playback self-test must not fetch media upstream.
@@ -55,7 +41,7 @@ try {
         return Promise.reject(`Unexpected IPC: ${cmd}`);
       } },
     });
-  }, agreement);
+  });
   page = await context.newPage();
   page.on("pageerror", error => report.pageErrors.push(error.message));
   await page.route("**/*", route => {

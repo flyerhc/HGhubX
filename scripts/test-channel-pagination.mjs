@@ -73,9 +73,8 @@ try {
     return h.length > 0 && h[h.length - 1].args.sort === "hot_window";
   });
   await page.evaluate(() => window.channelPaginationFixture.resolveNext("hot_window", 1));
-  const expectedHot = expectedPage(fixture.page1, "hot_window");
-  await page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll(".ios-media-grid .ios-poster-title")].map(el => el.textContent)) === JSON.stringify(expected), expectedHot);
-  assert.deepEqual(await titles(), expectedHot, "当前热播 must follow server hot_window order");
+  await page.waitForFunction(() => document.querySelectorAll(".ios-media-grid .ios-poster-title").length === 20);
+  assert.deepEqual(await titles(), expectedPage(fixture.page1, "hot_window"), "当前热播 must follow server hot_window order");
   report.passed.push("ChannelPage: 当前热播 is server-sorted");
 
   await page.getByRole("button", { name: "精选推荐", exact: true }).click();
@@ -84,9 +83,8 @@ try {
     return h.length > 0 && h[h.length - 1].args.sort === "random";
   });
   await page.evaluate(() => window.channelPaginationFixture.resolveNext("random", 1));
-  const expectedRandom = expectedPage(fixture.page1, "random");
-  await page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll(".ios-media-grid .ios-poster-title")].map(el => el.textContent)) === JSON.stringify(expected), expectedRandom);
-  assert.deepEqual(await titles(), expectedRandom, "精选推荐 must follow server random order");
+  await page.waitForFunction(() => document.querySelectorAll(".ios-media-grid .ios-poster-title").length === 20);
+  assert.deepEqual(await titles(), expectedPage(fixture.page1, "random"), "精选推荐 must follow server random order");
   report.passed.push("ChannelPage: 精选推荐 is server-sorted");
 
   assert.deepEqual(report.pageErrors, [], "No page errors");
