@@ -18,7 +18,7 @@ export default function Profile({ wide }: { wide: boolean }) {
 
 function ProfileContent({ wide }: { wide: boolean }) {
   const { blockReason } = useContentPreferences();
-  const { user, setLoginOpen, logout, history, favs, clearHistory, push, accountSync, syncAccount } = useStore();
+  const { user, setLoginOpen, logout, history, favs, clearHistory, push } = useStore();
   const [tab, setTab] = useState<"fav" | "history">("fav");
   const [cache, setCache] = useState<Record<number, Detail>>({});
   const cacheRef = useRef(cache);
@@ -83,7 +83,6 @@ function ProfileContent({ wide }: { wide: boolean }) {
     }
   };
 
-  const refreshAccount = () => { void syncAccount().catch(() => { /* Store exposes the recoverable sync error. */ }); };
   const clearWatchHistory = async () => {
     if (clearing.current) return;
     clearing.current = true;
@@ -135,7 +134,7 @@ function ProfileContent({ wide }: { wide: boolean }) {
             <Avatar size={56} icon={<IUser size={26} />} hue={220} ring />
             <div className="flex-1 min-w-0">
               <div className="text-[16px] font-bold text-on">未登录</div>
-              <div className="text-[12px] text-mut mt-0.5">登录后同步账号收藏、关注和观看记录</div>
+              <div className="text-[12px] text-mut mt-0.5">登录后查看账号收藏、关注和观看记录</div>
               <div className="flex gap-3 mt-2 text-[12px] text-mut">
                 <span>收藏 <b className="text-on">{favs.length}</b></span>
                 <span>观看 <b className="text-on">{history.length}</b></span>
@@ -146,17 +145,6 @@ function ProfileContent({ wide }: { wide: boolean }) {
             </span>
           </Button>
         )}
-
-        {user && <Surface className="mt-3 flex flex-wrap items-center gap-3 rounded-(--r-md) p-3" aria-busy={accountSync.busy}>
-          <div className="min-w-0 flex-1 text-[12px] text-mut">
-            <p role="status">{accountSync.busy ? "正在同步账号数据…" : accountSync.lastSynced ? `最近同步 ${new Date(accountSync.lastSynced).toLocaleTimeString()}` : "账号数据尚未同步"}</p>
-            <p className="mt-1">收藏、关注和观看集数跟随账号；精确播放进度保存在本机。</p>
-            {accountSync.error && <p role="alert" className="mt-1 break-words text-danger">{accountSync.error}</p>}
-          </div>
-          <Button disabled={accountSync.busy} onClick={refreshAccount} className="shrink-0 px-3 text-primary">
-            {accountSync.busy ? "同步中…" : accountSync.error ? "重试同步" : "刷新同步"}
-          </Button>
-        </Surface>}
 
         {/* 关注 / 我的主页 */}
         {user && (

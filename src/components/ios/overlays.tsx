@@ -60,7 +60,7 @@ function syncBackground() {
 
 function DialogFrame({ open, onClose, children, kind, width, label, z }: {
   open: boolean; onClose: () => void; children: ReactNode;
-  kind: "modal" | "sheet" | "dock"; width?: number; label: string; z?: string;
+  kind: "modal" | "sheet"; width?: number; label: string; z?: string;
 }) {
   const motion = !matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [mounted, setMounted] = useState(open);
@@ -163,7 +163,4 @@ export function Modal(props: { open: boolean; onClose: () => void; children: Rea
 }
 export function Sheet(props: { open: boolean; onClose: () => void; children: ReactNode; z?: string; label?: string }) {
   return <DialogFrame {...props} kind="sheet" label={props.label ?? "详情面板"} />;
-}
-export function DockPanel(props: { open: boolean; onClose: () => void; children: ReactNode; width?: number; label?: string }) {
-  return <DialogFrame {...props} kind="dock" label={props.label ?? "侧边面板"} width={props.width ?? 380} />;
 }

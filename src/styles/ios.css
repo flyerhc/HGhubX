@@ -134,8 +134,6 @@ html.theme-light {
 .ios-overlay-sheet .ios-dialog { width:min(640px,100%); max-height:calc(100dvh - max(env(safe-area-inset-top),24px)); padding-bottom:max(env(safe-area-inset-bottom),12px); }
 .ios-overlay-sheet.is-open .ios-dialog { animation:ios-sheet-in .28s cubic-bezier(.2,.8,.2,1) both; }
 .ios-sheet-grip { width:36px; height:5px; border-radius:4px; background:var(--p-dim); opacity:.5; margin:12px auto 6px; flex-shrink:0; }
-.ios-overlay-dock { justify-content:end; padding:12px; }
-.ios-overlay-dock .ios-dialog { height:100%; width:min(var(--ios-dialog-width,400px),94%); max-height:100%; }
 .ios-auth { padding:28px; }
 .ios-dialog-heading { display:flex; gap:12px; align-items:center; }
 .ios-dialog-heading h2 { font-size:22px; font-weight:700; letter-spacing:-.5px; flex:1; }

@@ -1,10 +1,10 @@
 import { Button, Image, Surface } from "./ios/controls";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { cover, platform } from "../api";
-export { Sheet, Modal, DockPanel } from "./ios/overlays";
+export { Sheet, Modal } from "./ios/overlays";
 import { useStore } from "../store";
 import { Loader } from "./ios/effects";
-import { IBoltF, ICheck, IClose, IGlobe, IHeartF, IMinus, ISparkF, IStarF } from "../icons";
+import { IBoltF, ICheck, IGlobe, IHeartF, IMinus, ISparkF, IStarF } from "../icons";
 
 /* ——— 头像 ——— */
 export function Avatar({ hue = 250, icon, name, size = 40, ring = false, className = "" }: {
@@ -54,11 +54,6 @@ export function Empty({ icon, title, sub, action, onAction }: {
       )}
     </div>
   );
-}
-
-/* ——— 键帽 ——— */
-export function Kbd({ children }: { children: React.ReactNode }) {
-  return <span className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-(--r-ctl) bg-s4 text-[12px] font-semibold text-on/85 elev-1">{children}</span>;
 }
 
 /* ——— Toast ——— */
@@ -115,38 +110,6 @@ export function ToastHost() {
         ),
       )}
     </div>
-  );
-}
-
-/* ——— 长按 ——— */
-export function useLongPress(cb: (e: { clientX: number; clientY: number }) => void, ms = 480) {
-  const timer = useRef<number | undefined>(undefined);
-  const start = useRef({ x: 0, y: 0 });
-  const fired = useRef(false);
-  const clear = () => { window.clearTimeout(timer.current); };
-  return {
-    onPointerDown: (e: React.PointerEvent) => {
-      fired.current = false;
-      start.current = { x: e.clientX, y: e.clientY };
-      const { clientX, clientY } = e;
-      timer.current = window.setTimeout(() => { fired.current = true; cb({ clientX, clientY }); }, ms);
-    },
-    onPointerMove: (e: React.PointerEvent) => {
-      if (Math.abs(e.clientX - start.current.x) > 10 || Math.abs(e.clientY - start.current.y) > 10) clear();
-    },
-    onPointerUp: clear,
-    onPointerLeave: clear,
-    onClickCapture: (e: React.MouseEvent) => { if (fired.current) { e.stopPropagation(); e.preventDefault(); fired.current = false; } },
-    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); cb({ clientX: e.clientX, clientY: e.clientY }); },
-  };
-}
-
-/* ——— 关闭按钮 ——— */
-export function CloseBtn({ onClick }: { onClick: () => void }) {
-  return (
-    <Button aria-label="关闭" onClick={onClick} className="ios-icon-button bg-s3/80 text-mut">
-      <IClose size={16} />
-    </Button>
   );
 }
 
