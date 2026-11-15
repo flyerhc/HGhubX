@@ -80,11 +80,11 @@ async function clickProgress(page, fraction) {
   const r = await input.boundingBox(); assert(r, "Seekbar missing");
   await page.mouse.click(r.x + r.width * fraction, r.y + r.height / 2);
 }
-async function wakePlaybackControls(page, legacy) {
+async function wakePlaybackControls(page, legacy, expectedAction = "暂停") {
   const root = page.locator(legacy ? ".post-player" : ".player-root");
   const bounds = await root.boundingBox(); assert(bounds, `${legacy ? "Legacy" : "Feed"} player missing`);
-  const control = page.getByRole("button", { name: "暂停", exact: true });
-  const button = await control.boundingBox(); assert(button, "Pause control missing");
+  const control = page.getByRole("button", { name: expectedAction, exact: true });
+  const button = await control.boundingBox(); assert(button, `${expectedAction} control missing`);
   // Enter the player first, then move onto the hover-revealed control itself.
   await root.hover({ position: { x: bounds.width / 2, y: bounds.height / 2 } });
   await page.mouse.move(button.x + button.width / 2, button.y + button.height / 2);
@@ -92,15 +92,15 @@ async function wakePlaybackControls(page, legacy) {
     const root = document.querySelector(legacy ? ".post-player" : ".player-root");
     const controls = root?.querySelector(legacy ? ".player-inline-controls" : ".desktop-controls");
     const control = root?.querySelector(legacy
-      ? '.player-inline-controls button[aria-label="暂停"]'
-      : '.desktop-controls button[aria-label="暂停"]');
+      ? `.player-inline-controls button[aria-label="${expectedAction}"]`
+      : `.desktop-controls button[aria-label="${expectedAction}"]`);
     const hit = document.elementFromPoint(x, y);
     return !!root && !!controls && !!control && !!hit
       && Number.parseFloat(getComputedStyle(controls).opacity) >= 0.99
       && getComputedStyle(controls).pointerEvents !== "none"
       && (control === hit || control.contains(hit))
       && (legacy || !root.classList.contains("is-idle"));
-  }, { x: button.x + button.width / 2, y: button.y + button.height / 2, legacy });
+  }, { x: button.x + button.width / 2, y: button.y + button.height / 2, legacy, expectedAction });
 }
 async function loadPlayer(page, legacy = false, extra = "") {
   await page.goto(`${report.ui}/tests/player-seek.html?diagnostics=1&proxy=${encodeURIComponent(report.media)}${legacy ? "&legacy=1" : ""}${extra}`);
@@ -368,14 +368,14 @@ async function lifecyclePlayerCheck(page, legacy) {
     assert(!logs.some(e => e.event === "hlsFragLoading"), "Hidden manifest must not start fragment loading");
     await page.evaluate(() => window.playerSeekFixture.setActive(true));
     await page.waitForFunction(() => document.querySelector("video").currentTime > 1 && !document.querySelector("video").paused);
-    await wakePlaybackControls(page, legacy);
+    await wakePlaybackControls(page, legacy, "暂停");
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await page.evaluate(() => window.playerSeekFixture.setActive(false));
     await page.waitForFunction(() => !window.playerSeekFixture.engineState().loading);
     await page.evaluate(() => window.playerSeekFixture.setActive(true));
     await page.waitForFunction(() => !document.querySelector('input[aria-label="播放进度"]').disabled);
     assert(await page.locator("video").evaluate(v => v.paused), "Manual pause must survive page reactivation");
-    if (!legacy) await wakePlaybackControls(page, legacy);
+    if (!legacy) await wakePlaybackControls(page, legacy, "播放");
     await page.getByRole("button", { name: "播放", exact: true }).first().click();
     await page.waitForFunction(() => !document.querySelector("video").paused);
     await page.locator("video").evaluate(v => v.pause());
