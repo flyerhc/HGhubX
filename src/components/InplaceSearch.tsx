@@ -1,6 +1,6 @@
 import { Button, Form, Input } from "./ios/controls";
 import { Loader } from "./ios/effects";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fmt } from "../api";
 import type { Post, VideoCard } from "../types";
 import { MediaCard, Masonry } from "./cards";
@@ -9,6 +9,7 @@ import { Empty } from "./ui";
 import { IBack, IClose, ISearch } from "../icons";
 import { useSearchResults } from "../useSearchResults";
 import { useDialogFocusTrap } from "./ios/dialogFocus";
+import { registerOverlayBack } from "../back";
 
 /** 栏目内搜索保持自身范围；与全局搜索共用请求、缓存和失败恢复逻辑。 */
 export function InplaceSearch({ kind, postLabel = "吃瓜帖", scope, onOpenVideo, onOpenPost, onClose, wide }: {
@@ -24,6 +25,8 @@ export function InplaceSearch({ kind, postLabel = "吃瓜帖", scope, onOpenVide
   const [submitted, setSubmitted] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const results = useSearchResults(scope);
   const { result, request, loading, error } = results;
   const items = result?.kind === "video" ? result.items as VideoCard[] : [];
@@ -38,6 +41,15 @@ export function InplaceSearch({ kind, postLabel = "吃瓜帖", scope, onOpenVide
     setQ(trimmed); setSubmitted(trimmed);
     results.search(trimmed, kind);
   };
+
+  useEffect(() => registerOverlayBack(() => {
+    const root = rootRef.current;
+    // Stack pages stay mounted under the next page. A hidden search must not consume
+    // the hardware back event that belongs to the page currently on top.
+    if (!root || root.closest("[inert]")) return false;
+    closeRef.current();
+    return true;
+  }), []);
 
   return (
     <div ref={rootRef} role="dialog" aria-modal="true" aria-label={`${label}搜索`} tabIndex={-1}
