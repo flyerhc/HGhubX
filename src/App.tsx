@@ -1,25 +1,38 @@
-import { LiquidIndicator } from "./components/ios/effects";
+import { LiquidIndicator, Loader } from "./components/ios/effects";
 import { Button } from "./components/ios/controls";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore, type Page, type Tab } from "./store";
 import { isMobile, selfTest } from "./api";
 import { addPluginListener, invoke } from "@tauri-apps/api/core";
 import { runBack } from "./back";
 import Home from "./pages/Home";
-import Search, { RankPage } from "./pages/Search";
-import Category, { ChannelPage } from "./pages/Category";
-import Profile from "./pages/Profile";
-import SettingsPage from "./pages/Settings";
 import Feed from "./components/Feed";
-import { PostsPage, PostDetail } from "./pages/Posts";
-import { TopicsPage, TopicPage, TagsPage, TagPage } from "./pages/Discover";
-import { FollowingPage, UserPage } from "./pages/User";
 import LoginModal from "./components/LoginModal";
 import { ToastHost } from "./components/ui";
 import { DesktopRail, DesktopTitleBar } from "./components/DesktopChrome";
 import ResizeHandles from "./components/ResizeHandles";
 import { tracePlayback } from "./playbackDiagnostics";
-import { IGrid, IGridF, IHome, IHomeF, ISearch, IUser, IUserF, Logo } from "./icons";
+import { IGrid, IGridF, IHome, IHomeF, ISearch, IUser, IUserF } from "./icons";
+
+// Local chunks load on first visit; visited tabs stay mounted as before.
+const Search = lazy(() => import("./pages/Search"));
+const RankPage = lazy(() => import("./pages/Search").then(module => ({ default: module.RankPage })));
+const Category = lazy(() => import("./pages/Category"));
+const ChannelPage = lazy(() => import("./pages/Category").then(module => ({ default: module.ChannelPage })));
+const Profile = lazy(() => import("./pages/Profile"));
+const SettingsPage = lazy(() => import("./pages/Settings"));
+const PostsPage = lazy(() => import("./pages/Posts").then(module => ({ default: module.PostsPage })));
+const PostDetail = lazy(() => import("./pages/Posts").then(module => ({ default: module.PostDetail })));
+const TopicsPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TopicsPage })));
+const TopicPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TopicPage })));
+const TagsPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TagsPage })));
+const TagPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TagPage })));
+const FollowingPage = lazy(() => import("./pages/User").then(module => ({ default: module.FollowingPage })));
+const UserPage = lazy(() => import("./pages/User").then(module => ({ default: module.UserPage })));
+
+function PageLoading() {
+  return <div className="absolute inset-0 grid place-items-center bg-bg"><Loader label="页面加载中" /></div>;
+}
 
 const SELECTABLE_TEXT = 'input, textarea, [contenteditable="true"], .select-text, .article-body';
 const isSelectableText = (target: EventTarget | null) => target instanceof Element && !!target.closest(SELECTABLE_TEXT);
@@ -51,7 +64,11 @@ function TabBar() {
 }
 
 /* ============ 堆栈页面 ============ */
-function StackPage({ page, onBack, wide, top, bottomInset }: {
+function StackPage(props: Parameters<typeof StackPageContent>[0]) {
+  return <Suspense fallback={<PageLoading />}><StackPageContent {...props} /></Suspense>;
+}
+
+function StackPageContent({ page, onBack, wide, top, bottomInset }: {
   page: Page; onBack: () => void; wide: boolean; top: boolean; bottomInset: number;
 }) {
   if (page.kind === "feed") {
@@ -87,9 +104,9 @@ function MainTabs({ wide, pageActive, bottomInset }: { wide: boolean; pageActive
   // First visits mount on demand; subsequent switches preserve queries, scroll and playback state.
   return <>
     <div className={visible("home")} inert={!pageActive || tab !== "home"} aria-hidden={!pageActive || tab !== "home"}>{mounted("home") && <Home active={pageActive && tab === "home"} bottomInset={bottomInset} />}</div>
-    <div className={visible("search")} inert={!pageActive || tab !== "search"} aria-hidden={!pageActive || tab !== "search"}>{mounted("search") && <Search active={pageActive && tab === "search"} wide={wide} />}</div>
-    <div className={visible("category")} inert={!pageActive || tab !== "category"} aria-hidden={!pageActive || tab !== "category"}>{mounted("category") && <Category wide={wide} active={pageActive && tab === "category"} />}</div>
-    <div className={visible("profile")} inert={!pageActive || tab !== "profile"} aria-hidden={!pageActive || tab !== "profile"}>{mounted("profile") && <Profile wide={wide} />}</div>
+    <div className={visible("search")} inert={!pageActive || tab !== "search"} aria-hidden={!pageActive || tab !== "search"}>{mounted("search") && <Suspense fallback={<PageLoading />}><Search active={pageActive && tab === "search"} wide={wide} /></Suspense>}</div>
+    <div className={visible("category")} inert={!pageActive || tab !== "category"} aria-hidden={!pageActive || tab !== "category"}>{mounted("category") && <Suspense fallback={<PageLoading />}><Category wide={wide} active={pageActive && tab === "category"} /></Suspense>}</div>
+    <div className={visible("profile")} inert={!pageActive || tab !== "profile"} aria-hidden={!pageActive || tab !== "profile"}>{mounted("profile") && <Suspense fallback={<PageLoading />}><Profile wide={wide} /></Suspense>}</div>
   </>;
 }
 
@@ -317,8 +334,6 @@ export default function App() {
       {isMobile ? <MobileShell /> : <DesktopShell />}
       <LoginModal />
       <ToastHost />
-      {/* 登录遮罩键盘处理占位 */}
-      {loginOpen && <div className="hidden" onClick={() => setLoginOpen(false)} />}
     </>
   );
 }

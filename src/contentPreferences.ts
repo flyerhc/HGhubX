@@ -28,12 +28,35 @@ function readPreferences(): ContentPreferences {
   catch { return normalizePreferences(null); }
 }
 
+// Preference snapshots are replaced on every edit. Reuse their normalized index
+// across cards; WeakMap releases obsolete snapshots without retaining tag history.
+const tagIndexes = new WeakMap<ContentPreferences, Map<string, number>>();
+function tagIndex(preferences: ContentPreferences) {
+  let index = tagIndexes.get(preferences);
+  if (!index) {
+    index = new Map();
+    preferences.blockedTags.forEach((tag, rank) => {
+      const key = normalizeTag(tag);
+      if (key && !index!.has(key)) index!.set(key, rank);
+    });
+    tagIndexes.set(preferences, index);
+  }
+  return index;
+}
+
 export function blockReason(tags: readonly string[] | undefined, preferences: ContentPreferences): string | null {
-  if (preferences.paused) return null;
-  const keys = new Set((Array.isArray(tags) ? tags : []).map(normalizeTag).filter(Boolean));
-  if (!keys.size) return preferences.hideUntagged ? "未提供标签" : null;
-  const hit = preferences.blockedTags.find(tag => keys.has(normalizeTag(tag)));
-  return hit ? `屏蔽标签：${hit}` : null;
+  if (preferences.paused || (!preferences.hideUntagged && !preferences.blockedTags.length)) return null;
+  const index = tagIndex(preferences);
+  let hasTags = false, first = Infinity;
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    const key = normalizeTag(tag);
+    if (!key) continue;
+    hasTags = true;
+    const rank = index.get(key);
+    if (rank !== undefined && rank < first) first = rank;
+  }
+  if (!hasTags) return preferences.hideUntagged ? "未提供标签" : null;
+  return first < Infinity ? `屏蔽标签：${preferences.blockedTags[first]}` : null;
 }
 
 type Snapshot = { preferences: ContentPreferences; revision: number; storageError: string | null };
@@ -72,7 +95,7 @@ const actions = {
   setPaused(paused: boolean) { if (typeof paused === "boolean") update({ ...snapshot.preferences, paused }); },
   setHideUntagged(hideUntagged: boolean) { if (typeof hideUntagged === "boolean") update({ ...snapshot.preferences, hideUntagged }); },
   clearBlockedTags() { update({ ...snapshot.preferences, blockedTags: [] }); },
-  isTagBlocked(tag: string) { return snapshot.preferences.blockedTags.some(name => normalizeTag(name) === normalizeTag(tag)); },
+  isTagBlocked(tag: string) { return tagIndex(snapshot.preferences).has(normalizeTag(tag)); },
   blockReason(tags: readonly string[] | undefined) { return blockReason(tags, snapshot.preferences); },
 };
 

@@ -101,10 +101,10 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
   }, [active, lineEpoch, items.length, load]);
   useEffect(() => { if (active && items.length) setFeedMounted(true); }, [active, items.length]);
 
-  const blockedByDetail = excluded.revision === revision && excluded.epoch === lineEpoch ? excluded.ids : [];
-  const visibleItems = items.filter(item => !blockReason(item.tags) && !blockedByDetail.includes(item.id));
-  const visibleKey = visibleItems.map(item => item.id).join(",");
-  const ids = useMemo(() => visibleKey ? visibleKey.split(",").map(Number) : [], [visibleKey]);
+  const ids = useMemo(() => {
+    const blocked = new Set(excluded.revision === revision && excluded.epoch === lineEpoch ? excluded.ids : []);
+    return items.filter(item => !blocked.has(item.id) && !blockReason(item.tags)).map(item => item.id);
+  }, [items, excluded, revision, lineEpoch, blockReason]);
   const onBlocked = useCallback((id: number) => setExcluded(previous => {
     const ids = previous.revision === revision && previous.epoch === lineEpoch ? previous.ids : [];
     return ids.includes(id) ? previous : { revision, epoch: lineEpoch, ids: [...ids, id] };
