@@ -26,6 +26,9 @@ try {
   await context.addInitScript(() => {
     const fixture = { calls: [], unexpected: [] };
     const emptyPage = { items: [], pagination: { page: 1, pages: 1, size: 8, total: 0 } };
+    localStorage.setItem("hghubx_usage_agreement", JSON.stringify({
+      version: "2026-11-15-v1", accepted: true, acceptedAt: "2026-11-15T00:00:00.000Z",
+    }));
     Object.assign(window, {
       mobileLayoutFixture: fixture,
       __TAURI_INTERNALS__: { invoke(cmd, args = {}) {
