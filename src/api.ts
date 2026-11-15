@@ -136,7 +136,7 @@ export const api = {
 
   feed: (page = 1, size = 20) => call<Paged<VideoCard>>("api_feed", { page, size }),
   topics: () => call<{ items: TopicCard[] }>("api_topics"),
-  topic: (slug: string) => call<TopicDetail>("api_topic", { slug }),
+  topic: (slug: string, page = 1, size = 20) => call<TopicDetail>("api_topic", { slug, page, size }),
   tags: () => call<{ categories: TagGroup[] }>("api_tags"),
   tagVideos: (tag: string, page = 1, size = 20) =>
     call<Paged<VideoCard>>("api_tag_videos", { tag, page, size }),
