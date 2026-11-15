@@ -179,7 +179,7 @@ export default function Settings({ onBack, initialSection }: { onBack: () => voi
               <span className="ios-setting-icon"><IBroom size={16} /></span>
               <div className="flex-1">
                 <div className="text-[14px] text-on">清理缓存</div>
-                <div className="text-[12px] text-mut">清理封面、播放和 WebView 缓存</div>
+                <div className="text-[12px] text-mut">非 Linux 只清应用内媒体缓存；Linux 桌面版额外清 WebView 缓存</div>
               </div>
               <IChevR size={15} className="text-mut" />
             </Button>
