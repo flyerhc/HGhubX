@@ -41,6 +41,7 @@ static IMG_LOADING: Lazy<Mutex<HashMap<(u64, String), Weak<ImageLoad>>>> =
 static IMG_GENERATION: AtomicU64 = AtomicU64::new(0);
 static PL_CACHE: Lazy<Mutex<HashMap<String, Arc<String>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static PL_CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// AES Key / 分片：拖进度条时同一 key、同一片会被反复拉，缓存住省一次往返。
 static KEY_CACHE: Lazy<Mutex<HashMap<String, (String, Arc<Vec<u8>>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -142,6 +143,19 @@ const PL_CACHE_MAX: usize = 60;
 const KEY_CACHE_MAX: usize = 120;
 const SEG_CACHE_MAX: usize = 36;
 const SEG_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+// Linux can selectively clear WebKit's durable cache, so proxied media must not
+// regrow it without bound. Other platforms lack that safe clearing path here;
+// keep the original WebKit disk-cache fallback for native HLS and seeks.
+#[cfg(target_os = "linux")]
+const PROXIED_MEDIA_CACHE_CONTROL: &str = "no-store";
+#[cfg(not(target_os = "linux"))]
+const PROXIED_MEDIA_CACHE_CONTROL: &str = "public, max-age=3600";
+
+#[cfg(target_os = "linux")]
+const PROXIED_IMAGE_CACHE_CONTROL: &str = "no-store";
+#[cfg(not(target_os = "linux"))]
+const PROXIED_IMAGE_CACHE_CONTROL: &str = "public, max-age=86400";
 
 fn cache_put<V: Clone>(map: &Mutex<HashMap<String, V>>, key: String, val: V, max: usize) {
     let mut m = map.lock().unwrap();
@@ -370,6 +384,7 @@ fn rewrite_uri_attr(line: &str, prefix: &str) -> String {
 pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, String> {
     // 缓存 key 要带 prefix：同一份 m3u8 在不同 scheme 下改写结果不一样
     let cache_key = format!("{prefix}|{url}");
+    let generation = PL_CACHE_GENERATION.load(Ordering::Acquire);
     if let Some(hit) = PL_CACHE.lock().unwrap().get(&cache_key).cloned() {
         return Ok(hit);
     }
@@ -379,7 +394,17 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
         return Err("响应不是 HLS 播放列表".into());
     }
     let arc = Arc::new(rewrite_playlist(url, text, prefix));
-    cache_put(&PL_CACHE, cache_key, arc.clone(), PL_CACHE_MAX);
+    let mut cache = PL_CACHE.lock().unwrap();
+    // clear_caches advances the epoch first; never let an older in-flight
+    // playlist repopulate the cache after that clear.
+    if PL_CACHE_GENERATION.load(Ordering::Acquire) == generation {
+        if cache.len() >= PL_CACHE_MAX {
+            if let Some(key) = cache.keys().next().cloned() {
+                cache.remove(&key);
+            }
+        }
+        cache.insert(cache_key, arc.clone());
+    }
     Ok(arc)
 }
 
@@ -482,6 +507,7 @@ pub fn clear_caches() {
         IMG_GENERATION.fetch_add(1, Ordering::AcqRel);
         g.clear();
     }
+    PL_CACHE_GENERATION.fetch_add(1, Ordering::AcqRel);
     if let Ok(mut g) = PL_CACHE.lock() {
         g.clear();
     }
@@ -586,8 +612,7 @@ fn segment_response(
                 200,
                 "application/vnd.apple.mpegurl",
                 rewrite_playlist(target, text, origin).into_bytes(),
-                // Rewriting nested URIs does not require disabling the upstream cache policy.
-                "public, max-age=3600",
+                PROXIED_MEDIA_CACHE_CONTROL,
             ),
             Err(_) => respond(
                 502,
@@ -601,7 +626,7 @@ fn segment_response(
         200,
         ctype.unwrap_or("application/octet-stream"),
         bytes,
-        "public, max-age=3600",
+        PROXIED_MEDIA_CACHE_CONTROL,
     )
 }
 
@@ -633,9 +658,12 @@ pub async fn handle(path: &str, query: &str, origin: &str, range: Option<&str>) 
     );
     let response = match path {
         "/img" => match load_image(&target).await {
-            Ok((kind, bytes)) => {
-                respond(200, &kind, bytes.as_ref().clone(), "public, max-age=86400")
-            }
+            Ok((kind, bytes)) => respond(
+                200,
+                &kind,
+                bytes.as_ref().clone(),
+                PROXIED_IMAGE_CACHE_CONTROL,
+            ),
             Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
         },
         "/hls" => match load_playlist(&target, origin).await {
@@ -907,6 +935,10 @@ mod tests {
             "application/vnd.apple.mpegurl"
         );
         assert_eq!(response.headers()["X-Content-Type-Options"], "nosniff");
+        assert_eq!(
+            response.headers()["Cache-Control"],
+            PROXIED_MEDIA_CACHE_CONTROL
+        );
         assert!(!response
             .headers()
             .contains_key("Access-Control-Allow-Origin"));
@@ -921,6 +953,44 @@ mod tests {
             LOCAL_ORIGIN,
         );
         assert!(bom.body().starts_with(b"#EXTM3U\n"));
+    }
+
+    #[test]
+    fn proxied_media_uses_platform_cache_policy() {
+        let segment = segment_response(
+            "https://cdn.example/seg-1.ts",
+            Some("video/mp2t"),
+            b"segment-bytes".to_vec(),
+            LOCAL_ORIGIN,
+        );
+        assert_eq!(
+            segment.headers()["Cache-Control"],
+            PROXIED_MEDIA_CACHE_CONTROL
+        );
+        let playlist = segment_response(
+            "https://cdn.example/list.m3u8",
+            None,
+            b"#EXTM3U\nseg-1.ts\n".to_vec(),
+            LOCAL_ORIGIN,
+        );
+        assert_eq!(
+            playlist.headers()["Cache-Control"],
+            PROXIED_MEDIA_CACHE_CONTROL
+        );
+    }
+
+    #[test]
+    fn platform_cache_policy_matches_selective_clear_support() {
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(PROXIED_MEDIA_CACHE_CONTROL, "no-store");
+            assert_eq!(PROXIED_IMAGE_CACHE_CONTROL, "no-store");
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert_eq!(PROXIED_MEDIA_CACHE_CONTROL, "public, max-age=3600");
+            assert_eq!(PROXIED_IMAGE_CACHE_CONTROL, "public, max-age=86400");
+        }
     }
 
     /// 联网测试：默认跳过，手动跑 `cargo test --lib -- --ignored`。
