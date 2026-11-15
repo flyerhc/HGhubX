@@ -4,7 +4,18 @@ import type { AccountHistoryItem, AccountIdentity, AccountInteractions, User } f
 import type { WatchProgress } from "./store";
 
 type Kind = "video" | "post";
-type GuestData = { likes: number[]; favs: number[]; follows: number[]; history: WatchProgress[] };
+export type GuestData = {
+  likes: number[]; favs: number[]; follows: number[]; history: WatchProgress[];
+  postLikes?: number[]; postFavs?: number[];
+  likeEpisodes?: { video_id: number; ep: number }[];
+  localHistory?: number[];
+};
+
+/** Share one library-only boundary without losing guest post or episode interactions. */
+export function pickGuestData(data: GuestData): GuestData {
+  return { likes: data.likes, favs: data.favs, follows: data.follows, history: data.history,
+    postLikes: data.postLikes, postFavs: data.postFavs, likeEpisodes: data.likeEpisodes, localHistory: data.localHistory };
+}
 type AccountData = GuestData & {
   postLikes: number[]; postFavs: number[];
   likeEpisodes?: { video_id: number; ep: number }[];
@@ -23,7 +34,8 @@ const validProgress = (value: unknown): value is WatchProgress => {
 };
 function sanitize(value: Partial<AccountData> | null | undefined): AccountData {
   const data = { ...empty(), ...value };
-  return { ...data, likes: ids(data.likes), favs: ids(data.favs), follows: ids(data.follows), postLikes: ids(data.postLikes), postFavs: ids(data.postFavs),
+  // Account snapshots must never retain unrelated application preferences.
+  return { likes: ids(data.likes), favs: ids(data.favs), follows: ids(data.follows), postLikes: ids(data.postLikes), postFavs: ids(data.postFavs),
     history: Array.isArray(data.history) ? data.history.filter(validProgress) : [], localHistory: ids(data.localHistory),
     likeEpisodes: Array.isArray(data.likeEpisodes) ? data.likeEpisodes.filter(row => Number.isSafeInteger(row?.video_id) && row.video_id > 0 && Number.isSafeInteger(row.ep) && row.ep > 0) : undefined,
     dirtyHistory: Object.fromEntries(Object.entries(data.dirtyHistory || {}).filter(([id, row]) => Number.isSafeInteger(Number(id)) && Number(id) > 0 && Number.isSafeInteger(row?.ep) && row.ep > 0 && Number.isFinite(row.at))),
@@ -80,7 +92,10 @@ export function useAccountData(initialGuest: GuestData, saveGuest: (data: GuestD
   const persist = (data: AccountData) => {
     const s = state.current!;
     s.data = data;
-    if (!s.user) { guest.current = data; saveGuestRef.current(data); }
+    if (!s.user) {
+      guest.current = data;
+      saveGuestRef.current(pickGuestData(data));
+    }
     else {
       accounts.current[s.key] = data;
       try { localStorage.setItem(ACCOUNT_KEY, JSON.stringify({ version: 1, accounts: accounts.current })); storageError.current = ""; }
