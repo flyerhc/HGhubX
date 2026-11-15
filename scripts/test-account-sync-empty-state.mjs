@@ -17,7 +17,7 @@ try {
   const origin = vite.resolvedUrls.local[0];
   browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || "/usr/bin/google-chrome" });
 
-  const openProfile = async ({ favoriteIds = [], delaySync = false, rejectFirstSync = false } = {}) => {
+  const openProfile = async ({ favoriteIds = [], delaySync = false, rejectFirstSync = false, rejectHistory = false, omitFavorites = false } = {}) => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
     await context.addInitScript(installFixture, { theme: "light", titles: ["城市与晚风", "重逢在夏日以后", "星河旅人"] });
     await context.addInitScript(options => {
@@ -40,15 +40,16 @@ try {
           await window.__ACCOUNT_SYNC_GATE__;
           window.__API_ME_CALLS__ += 1;
           if (!window.__ALLOW_SYNC_SUCCESS__) throw new Error("模拟账号同步失败");
-          return { user, interactions: { favorite_video_ids: options.favoriteIds }, origin: "https://fixture.invalid" };
+          return { user, interactions: options.omitFavorites ? {} : { favorite_video_ids: options.favoriteIds }, origin: "https://fixture.invalid" };
         }
         if (command === "api_account_history") {
           await window.__ACCOUNT_SYNC_GATE__;
+          if (options.rejectHistory) throw "模拟历史读取失败";
           return { items: [], pagination: { page: 1, pages: 1, size: 100, total: 0 } };
         }
         return original(command, args);
       };
-    }, { favoriteIds, delaySync, rejectFirstSync });
+    }, { favoriteIds, delaySync, rejectFirstSync, rejectHistory, omitFavorites });
     const page = await context.newPage();
     page.on("pageerror", error => report.errors.push(error.message));
     await page.route("**/*", route => {
@@ -103,6 +104,25 @@ try {
     assert.equal(await page.evaluate(calls => window.__API_ME_CALLS__ > calls, callsBeforeRetry), true,
       "Retry invokes account synchronization again");
     report.checks.push("failed first sync shows unknown with retry, then a successful retry confirms the empty state");
+    await context.close();
+  }
+
+  {
+    const { context, page } = await openProfile({ rejectHistory: true });
+    await page.getByText("还没有收藏", { exact: true }).waitFor();
+    assert.equal(await page.getByText("收藏状态未知", { exact: true }).count(), 0,
+      "An unrelated history failure must not invalidate a successfully loaded empty favorites snapshot");
+    assert.equal(await page.getByRole("status", { name: "正在同步收藏", exact: true }).count(), 0);
+    report.checks.push("successful favorites remain known even when history synchronization fails");
+    await context.close();
+  }
+
+  {
+    const { context, page } = await openProfile({ omitFavorites: true });
+    await page.getByText("收藏状态未知", { exact: true }).waitFor();
+    assert.equal(await page.getByText("还没有收藏", { exact: true }).count(), 0,
+      "A successful profile without favorite ids must not confirm that favorites are empty");
+    report.checks.push("missing favorites data stays unknown instead of becoming a confirmed empty collection");
     await context.close();
   }
 

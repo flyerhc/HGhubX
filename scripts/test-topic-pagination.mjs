@@ -62,13 +62,13 @@ try {
   assert.equal((await titles())[0], "专题影片 1");
   report.passed.push("TopicPage: a stale response from the previous topic cannot replace the selected topic");
 
-  await page.getByText(/已展示 20 \/ 81 部/).waitFor();
+  await page.getByText(/已加载 20 \/ 81 部/).waitFor();
   await loadMore.click();
   await page.waitForFunction(() => window.topicPaginationFixture.history.length === 3);
   await request("luanlun-aiduanju", 2);
   await page.waitForFunction(() => document.querySelectorAll("[data-ui='media-grid'] .ios-poster-title").length === 39);
   assert.equal((await titles()).filter((title) => title === "专题影片 20").length, 1, "A page-boundary duplicate must render once");
-  await page.getByText(/已展示 39 \/ 81 部/).waitFor();
+  await page.getByText(/已加载 39 \/ 81 部/).waitFor();
   report.passed.push("TopicPage: page 2 appends and a repeated card id is de-duplicated");
 
   await loadMore.click();
@@ -91,8 +91,8 @@ try {
   await page.waitForFunction(() => window.topicPaginationFixture.history.length === 7);
   await request("luanlun-aiduanju", 5);
   await page.waitForFunction(() => document.querySelectorAll("[data-ui='media-grid'] .ios-poster-title").length === 81);
-  await page.getByText(/已展示 81 \/ 81 部/).waitFor();
-  await page.getByText("已展示全部 81 部", { exact: true }).waitFor();
+  await page.getByText(/已加载 81 \/ 81 部/).waitFor();
+  await page.getByText("已加载全部 81 部", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: /加载更多/ }).count(), 0, "All five pages must terminate pagination");
   assert.deepEqual(
     await page.evaluate(() => window.topicPaginationFixture.history.slice(1).map(({ page: pageNumber, size }) => ({ page: pageNumber, size }))),

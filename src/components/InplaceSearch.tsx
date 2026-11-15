@@ -53,6 +53,7 @@ export function InplaceSearch({ kind, postLabel = "吃瓜帖", scope, onOpenVide
 
   return (
     <div ref={rootRef} role="dialog" aria-modal="true" aria-label={`${label}搜索`} tabIndex={-1}
+      onKeyDown={event => event.stopPropagation()}
       className="ios-page ios-inplace-search absolute inset-0 z-20 bg-bg flex flex-col outline-none">
       <div className="shrink-0 px-4 pb-3 flex items-center gap-2.5 bg-s1" style={{ paddingTop: "calc(var(--sat, 0px) + 12px)" }}>
         <Button onClick={onClose} className="w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable" aria-label="退出搜索"><IBack size={19} /></Button>

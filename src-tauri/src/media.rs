@@ -157,16 +157,6 @@ const PROXIED_IMAGE_CACHE_CONTROL: &str = "no-store";
 #[cfg(not(target_os = "linux"))]
 const PROXIED_IMAGE_CACHE_CONTROL: &str = "public, max-age=86400";
 
-fn cache_put<V: Clone>(map: &Mutex<HashMap<String, V>>, key: String, val: V, max: usize) {
-    let mut m = map.lock().unwrap();
-    if m.len() >= max {
-        if let Some(k) = m.keys().next().cloned() {
-            m.remove(&k);
-        }
-    }
-    m.insert(key, val);
-}
-
 /// Run one in-progress request per key. Every waiter clones the same result,
 /// including an error. Failed cells are removed immediately so a later request
 /// can retry instead of inheriting a short-lived failed flight.

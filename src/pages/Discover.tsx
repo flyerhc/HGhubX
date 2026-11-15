@@ -190,7 +190,7 @@ export function TopicPage({ slug, name, onBack, wide }: { slug: string; name: st
           <Button aria-label="返回" onClick={onBack} className="w-10 h-10 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><IBack size={20} /></Button>
           <div className="flex-1 min-w-0">
             <h1 className="text-[16px] font-bold text-on truncate" title={topic?.title || name}>{topic?.title || name}</h1>
-            <div className="text-[12px] text-mut">{loading ? "加载中…" : `已展示 ${videos.length} / ${total} 部`}</div>
+            <div className="text-[12px] text-mut">{loading ? "加载中…" : `已加载 ${videos.length} / ${total} 部`}</div>
           </div>
           <Button onClick={() => setSearching(true)} aria-label="搜索短剧" className="ml-auto w-9 h-9 rounded-full flex items-center justify-center text-on hover:bg-s3 pressable"><ISearch size={19} /></Button>
         </div>
@@ -237,7 +237,7 @@ export function TopicPage({ slug, name, onBack, wide }: { slug: string; name: st
         {!loading && !loadingMore && hasMore && <Button onClick={loadMore} className="mt-3 w-full rounded-(--r-ctl) bg-s3 py-2.5 text-[13px] text-on pressable">
           加载更多（{videos.length}/{total}）
         </Button>}
-        {!loading && !loadingMore && !hasMore && videos.length > 0 && <div className="py-3 text-center text-[12px] text-dim">已展示全部 {total} 部</div>}
+        {!loading && !loadingMore && !hasMore && videos.length > 0 && <div className="py-3 text-center text-[12px] text-dim">已加载全部 {total} 部</div>}
         {wide && <div className="h-2" />}
       </div>
       {searching && <InplaceSearch kind="video" wide={wide} onClose={() => setSearching(false)} onOpenVideo={(v, list) => push({ kind: "feed", videoIds: list.map((x) => x.id), index: list.findIndex((x) => x.id === v.id), title: topic?.title || name })} />}

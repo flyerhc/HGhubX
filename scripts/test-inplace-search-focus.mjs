@@ -46,6 +46,18 @@ try {
     "Page content behind the in-place search is inert");
   report.checks.push("search is a modal dialog, receives focus, and makes the covered page inert");
 
+  // Non-input controls must not leak shortcuts to the shell's window listener.
+  await dialog.getByRole("button", { name: "退出搜索", exact: true }).focus();
+  for (const key of ["/", "1", "2", "3", "4"]) {
+    await page.keyboard.press(key);
+    assert.equal(await dialog.count(), 1, `${key} must not switch tabs or discard the search page`);
+    assert.equal(await field.isVisible(), true, `${key} keeps the search field visible`);
+    assert.equal(await page.getByRole("heading", { name: "专题", exact: true, includeHidden: true }).count(), 1,
+      `${key} keeps the underlying topic page mounted`);
+  }
+  await field.focus();
+  report.checks.push("shell slash and number shortcuts stay inside search without navigating away");
+
   const activeInside = () => page.evaluate(() => {
     const dialogElement = document.querySelector(".ios-inplace-search");
     return !!dialogElement && !!document.activeElement && dialogElement.contains(document.activeElement);
