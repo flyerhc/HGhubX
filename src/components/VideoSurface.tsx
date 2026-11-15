@@ -1,6 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "react";
 import Hls from "hls.js";
-import { isLocalMedia, platform, playlist } from "../api";
+import { platform } from "../api";
+import { connectNativeMedia, playbackSource } from "../mediaTransport";
 import { mediaErrorMessage } from "../mediaErrors";
 import { mediaHost, mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
@@ -49,6 +50,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const latestSource = useRef(src); latestSource.current = src;
   const hlsRef = useRef<Hls | null>(null);
   const recoverCountRef = useRef(0);
   const recoverTimerRef = useRef<number | null>(null);
@@ -110,10 +112,9 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     video.addEventListener("resize", onVideoResize);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
-    const proxied = isLocalMedia(src);
-    const url = proxied ? src : playlist(src);
-    const useHls = !url.includes("/seg?u=");
-    trace("source.load", { engine: useHls && Hls.isSupported() ? "hls.js" : "native", auto_play: autoPlay, resource: mediaResource(src), host: mediaHost(src) });
+    const source = playbackSource(src, Hls.isSupported());
+    let disconnectNative: (() => void) | undefined;
+    trace("source.load", { engine: source.engine, auto_play: autoPlay, resource: mediaResource(src), host: mediaHost(src) });
 
     /* 换源时先把音量/倍速套回去：hls 重新 attach 后浏览器会把它们重置成默认值 */
     const applySettings = () => {
@@ -125,7 +126,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     };
     applySettings();
 
-    if (useHls && Hls.isSupported()) {
+    if (source.engine === "hls.js") {
       const hls = new Hls({
         // 禁用从插播/内容引导 JSON 派生直连 URL 的可选功能。
         interstitialsController: undefined,
@@ -151,7 +152,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       });
       hlsRef.current = hls;
       observeHls(hls, trace);
-      hls.loadSource(url);
+      hls.loadSource(source.url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (activity.isActive()) hls.startLoad(resume?.time ?? -1);
@@ -188,11 +189,15 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         else { hls.destroy(); hlsRef.current = null; }
       });
     } else {
-      video.src = url;
-      if (autoPlay && !resume) activity.play("native_autoplay", true);
+      disconnectNative = connectNativeMedia(video, source, {
+        isCurrent: () => latestSource.current === src && videoRef.current === video,
+        onReady: () => { if (activity.isPlayWanted() && !resume) activity.play("native_autoplay", true); },
+        onError: message => { trace("source.transport_error"); onError?.(message); },
+      });
     }
 
     return () => {
+      disconnectNative?.();
       video.removeEventListener("resize", onVideoResize);
       if (recoverTimerRef.current) { window.clearTimeout(recoverTimerRef.current); recoverTimerRef.current = null; }
       trace("source.cleanup");
