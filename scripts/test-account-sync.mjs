@@ -372,10 +372,14 @@ try {
     await run(p, "quota", "syncAccount");
     assert.match((await state(p)).sync.error, /缓存|存储|保存/, "Sync completion must not erase a local cache write failure");
     assert.deepEqual((await state(p)).favs, [101, 102], "In-memory account remains usable");
-    await p.getByRole("alert").filter({ hasText: /缓存|存储|保存/ }).waitFor();
+    const alert = p.getByRole("alert").filter({ hasText: /缓存|存储|保存/ });
+    await alert.waitFor();
+    await alert.getByRole("button", { name: "重试同步", exact: true }).waitFor();
     await p.evaluate(() => window.accountSyncFixture.storageFault(false));
-    assert.equal((await run(p, "quota-retry", "syncAccount")).status, "fulfilled");
+    await alert.getByRole("button", { name: "重试同步", exact: true }).click();
+    await p.waitForFunction(() => !window.accountSyncFixture.state.sync.busy && window.accountSyncFixture.state.sync.error === "");
     assert.equal((await state(p)).sync.error, "");
+    await alert.waitFor({ state: "detached" });
   }, "boot=a");
 
   await test("offline-boot-prefers-confirmed-cache-over-stale-session-user", async p => {

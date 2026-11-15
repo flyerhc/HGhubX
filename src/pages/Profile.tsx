@@ -18,7 +18,7 @@ export default function Profile({ wide }: { wide: boolean }) {
 
 function ProfileContent({ wide }: { wide: boolean }) {
   const { blockReason } = useContentPreferences();
-  const { user, setLoginOpen, logout, history, favs, clearHistory, push } = useStore();
+  const { user, setLoginOpen, logout, history, favs, clearHistory, push, accountSync, syncAccount } = useStore();
   const [tab, setTab] = useState<"fav" | "history">("fav");
   const [cache, setCache] = useState<Record<number, Detail>>({});
   const cacheRef = useRef(cache);
@@ -145,6 +145,12 @@ function ProfileContent({ wide }: { wide: boolean }) {
             </span>
           </Button>
         )}
+
+        {user && accountSync.error && <div role="alert" className="mt-3 rounded-(--r-sm) bg-s3 p-3 text-[13px]">
+          <p className="text-danger break-words">{accountSync.error}</p>
+          <Button disabled={accountSync.busy} onClick={() => { void syncAccount().catch(() => {}); }}
+            className="mt-1 min-h-11 px-3 text-on">{accountSync.busy ? "正在重试…" : "重试同步"}</Button>
+        </div>}
 
         {/* 关注 / 我的主页 */}
         {user && (

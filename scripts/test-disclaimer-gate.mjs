@@ -24,7 +24,12 @@ const gated = async page => {
   assert.equal(await page.getByRole("navigation", { name: "主导航", exact: true }).count(), 0, "Application is not mounted before agreement acceptance");
   assert.equal(await page.locator("video").count(), 0);
 };
-const finishIntro = async page => { await page.getByRole("button", { name: "跳过启动动画", exact: true }).click(); await page.clock.runFor(32); };
+const finishIntro = async page => {
+  await intro(page).waitFor();
+  assert.equal(await page.getByRole("button", { name: "跳过启动动画", exact: true }).count(), 0, "Startup no longer presents a skip button");
+  await page.clock.runFor(2600);
+  await intro(page).waitFor({ state: "hidden" });
+};
 const accept = async page => { await agreement(page).getByRole("checkbox").check(); await acceptButton(page).click(); await page.clock.runFor(32); };
 const mounted = async page => { await page.getByRole("navigation", { name: "主导航", exact: true }).waitFor(); await page.waitForFunction(() => ["app_boot", "api_feed", "line_auto"].every(command => window.disclaimerGateFixture.calls.some(call => call.command === command))); };
 const bounds = locator => locator.evaluate(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; });

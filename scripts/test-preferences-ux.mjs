@@ -160,25 +160,40 @@ try {
     assert((await state(page)).preferences.blockedTags.includes("自然观察"));
   }, { paused: true });
 
-  await run("blocked-notice-storage-retry-and-short-screen", async page => {
+  await run("silent-skip-storage-retry-and-short-screen", async page => {
     await openFeed(page); await page.getByRole("button", { name: "不感兴趣", exact: true }).click();
     await page.evaluate(() => window.preferencesUXFixture.storageFault(true));
     const longTag = await page.evaluate(() => window.preferencesUXFixture.longTag);
     await menu(page).getByRole("button", { name: "全部标签（40）", exact: true }).click();
     await menu(page).getByRole("button", { name: longTag, exact: true }).click();
     await menu(page).getByRole("button", { name: "屏蔽所选标签", exact: true }).click();
-    const notice = page.locator("[data-content-block-notice]"); await notice.waitFor();
-    await page.addStyleTag({ content: "[data-content-block-notice] :is(p,span,button,h1) { font-size:20px !important; overflow-wrap:anywhere; }" });
-    const alert = notice.getByRole("alert").filter({ hasText: /保存失败/ }); await alert.waitFor();
+    await page.getByText("当前列表没有可播放内容", { exact: true }).waitFor();
+    await menu(page).waitFor({ state: "hidden" });
+    assert.equal(await page.locator("[data-content-block-notice]").count(), 0, "A matching rule skips content without showing a block dialog");
+    assert.equal(await page.getByRole("button", { name: "本次查看", exact: true }).count(), 0);
+    assert.equal(await page.locator("video:visible").count(), 0, "The blocked item is removed even when saving fails");
+    const notice = page.getByRole("alert").and(page.locator("[data-preference-storage-notice]")); await notice.waitFor();
+    await page.addStyleTag({ content: "[data-preference-storage-notice] :is(p,span,button) { font-size:20px !important; overflow-wrap:anywhere; }" });
+    assert.equal(await notice.getAttribute("role"), "alert");
+    assert.match(await notice.textContent(), /保存失败/);
     const retry = notice.getByRole("button", { name: "重试保存", exact: true }); await retry.scrollIntoViewIfNeeded();
     assert(inside(await bounds(retry), 844, 390) && await actionable(retry), "Storage retry is reachable on short landscape screen");
     await page.evaluate(() => window.preferencesUXFixture.storageFault(false)); await retry.click();
-    await alert.waitFor({ state: "hidden" });
-    const once = notice.getByRole("button", { name: "本次查看", exact: true }); await once.scrollIntoViewIfNeeded();
-    assert(inside(await bounds(once), 844, 390) && await actionable(once));
+    await notice.waitFor({ state: "hidden" });
     assert((await state(page)).preferences.blockedTags.includes(longTag));
-    await once.click(); await notice.waitFor({ state: "hidden" });
+    assert.equal((await state(page)).storageError, null);
+    const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
+    assert(saved.blockedTags.includes(longTag), "Retry persists the in-memory rule without authorizing blocked playback");
+    await page.getByText("当前列表没有可播放内容", { exact: true }).waitFor();
+    assert.equal(await page.locator("video:visible").count(), 0);
+    const back = page.getByRole("button", { name: "返回", exact: true });
+    assert(inside(await bounds(back), 844, 390) && await actionable(back), "The empty player retains an accessible back action");
+    await back.click();
+    await page.waitForFunction(() => window.preferencesUXFixture.state.stack.length === 0);
+    await page.evaluate(() => window.preferencesUXFixture.pause(true));
+    await openFeed(page);
     await page.getByRole("button", { name: "视频详情", exact: true }).waitFor();
+    assert((await state(page)).preferences.blockedTags.includes(longTag), "Pausing restores access while retaining the saved rule");
   }, { width: 844, height: 390, many: true });
 
   await run("home-storage-failure-survives-video-skip", async page => {

@@ -18,6 +18,7 @@ import { createPlaybackClock } from "../playbackClock";
 import { useContentPreferences } from "../contentPreferences";
 import { TagBlockMenu } from "./TagBlockMenu";
 import VideoDetailsPanel from "./VideoDetailsPanel";
+import { PreferenceStorageNotice } from "./PreferenceStorageNotice";
 import MobileHoldGuide from "./MobileHoldGuide";
 import { getHoldZone, HOLD_DELAY_MS, HOLD_LOCK_DISTANCE, type HoldZone } from "../mobileHold";
 import { useMobileHoldGuide } from "../useMobileHoldGuide";
@@ -1121,6 +1122,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   if (!effectiveVideoIds.length) {
     return <div className="absolute inset-0 bg-black flex flex-col items-center justify-center gap-3" inert={!active || undefined} aria-hidden={!active || undefined}>
       <span className="text-[14px] text-white/70">当前列表没有可播放内容</span>
+      <PreferenceStorageNotice className="mx-4 max-w-sm" />
       {onBack && <Button onClick={onBack} className="min-h-11 rounded-full bg-white/10 px-5 text-white">返回</Button>}
     </div>;
   }

@@ -38,7 +38,11 @@ try {
     page.setDefaultTimeout(8000);
     page.on('pageerror', error => report.errors.push(error.message));
     await page.route('**/*', route => new URL(route.request().url()).origin === new URL(origin).origin ? route.continue() : route.abort());
-    const calls = () => page.evaluate(() => window.preferenceJourney.calls.filter(call => call.command === 'api_play').length);
+    const calls = id => page.evaluate(id => window.preferenceJourney.calls.filter(call => call.command === 'api_play' && (id === undefined || call.args.id === id)).length, id);
+    const noBlockingDialog = async () => {
+      assert.equal(await page.locator('[data-content-block-notice]').count(), 0, 'Filtering skips content without a confirmation screen');
+      assert.equal(await page.getByRole('button', { name: '本次查看', exact: true }).count(), 0);
+    };
     const nav = () => page.getByRole('navigation', { name: '主导航' });
     await page.goto(origin);
     // Use the actual app navigation, not a harness exposing preference setters.
@@ -65,19 +69,20 @@ try {
     report.checks.push(`${width}: settings applies immediately, favorites/history retain private placeholders and records`);
 
     await placeholder.click();
-    await page.getByRole('heading', { name: '内容已屏蔽', exact: true }).waitFor();
+    await page.getByText('当前列表没有可播放内容', { exact: true }).waitFor();
     assert.equal(await calls(), 0);
-    assert.equal(await page.locator('[data-content-block-notice] img, [data-content-block-notice] video').count(), 0);
-    await page.getByRole('button', { name: '本次查看', exact: true }).click();
-    await page.waitForFunction(() => window.preferenceJourney.calls.some(call => call.command === 'api_play'));
+    await noBlockingDialog();
+    assert.equal(await page.locator('video:visible').count(), 0, 'An all-blocked history does not create a player');
     assert.deepEqual(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).blockedTags, key), ['惊悚']);
     await page.getByRole('button', { name: '返回', exact: true }).click();
     await placeholder.click();
-    await page.getByRole('heading', { name: '内容已屏蔽', exact: true }).waitFor();
-    const afterOnce = await calls();
-    await page.screenshot({ path: fileURLToPath(new URL(`${width}-blocked.png`, output)) });
+    await page.getByText('当前列表没有可播放内容', { exact: true }).waitFor();
+    await noBlockingDialog();
+    assert.equal(await calls(), 0, 'Reopening a blocked record does not authorize media');
+    await page.screenshot({ path: fileURLToPath(new URL(`${width}-silently-filtered.png`, output)) });
     await page.getByRole('button', { name: '返回', exact: true }).click();
-    report.checks.push(`${width}: history opens guarded playback, once stays local and reopening asks again`);
+    await placeholder.waitFor();
+    report.checks.push(`${width}: history silently skips blocked content, retains its record and allows returning from an empty player`);
 
     await nav().getByRole('button', { name: '搜索', exact: true }).click();
     const input = page.getByRole('textbox').first();
@@ -89,15 +94,23 @@ try {
     await results.getByRole('button', { name: '日常记录', exact: true }).waitFor();
     await results.getByRole('button', { name: '临时展开', exact: true }).click();
     await results.getByRole('button', { name: '中性故事', exact: true }).click();
-    await page.getByRole('heading', { name: '内容已屏蔽', exact: true }).waitFor();
-    assert.equal(await calls(), afterOnce, 'Revealing cards must not authorize playback');
+    await page.waitForFunction(() => window.preferenceJourney.calls.some(call => call.command === 'api_play' && call.args.id === 2));
+    await noBlockingDialog();
+    assert.equal(await calls(1), 0, 'Revealing cards does not authorize blocked media; playback advances to the next allowed video');
+    await page.getByRole('button', { name: '不感兴趣', exact: true }).click();
     await page.getByRole('button', { name: '管理屏蔽标签', exact: true }).click();
     if (await page.getByRole('button', { name: '内容偏好设置', exact: true }).getAttribute('aria-expanded') === 'false')
       await page.getByRole('button', { name: '内容偏好设置', exact: true }).click();
     await page.getByRole('switch', { name: '暂停全部屏蔽', exact: true }).click();
     await page.getByRole('button', { name: '返回', exact: true }).click();
-    await page.waitForFunction(previous => window.preferenceJourney.calls.filter(call => call.command === 'api_play').length > previous, afterOnce);
-    report.checks.push(`${width}: search reveal does not bypass the player; preferences opened from guard apply to the underlying player`);
+    await page.getByRole('button', { name: '返回', exact: true }).click();
+    await results.getByRole('button', { name: '中性故事', exact: true }).click();
+    await page.waitForFunction(() => window.preferenceJourney.calls.some(call => call.command === 'api_play' && call.args.id === 1));
+    const preferences = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
+    assert.equal(preferences.paused, true);
+    assert.deepEqual(preferences.blockedTags, ['惊悚'], 'Pausing restores access without deleting the saved rules');
+    await noBlockingDialog();
+    report.checks.push(`${width}: search reveal still skips blocked media; pausing through the menu restores access and preserves rules`);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await context.close();
   }

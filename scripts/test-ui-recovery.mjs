@@ -14,6 +14,7 @@ const suites = [
   ['search', ['scripts/test-search-recovery.mjs']],
   ['discovery', ['scripts/test-discover-recovery.mjs']],
   ['posts', ['scripts/test-post-reading.mjs']],
+  ['post-player-controls', ['scripts/test-post-player-controls.mjs']],
   ['profile', ['scripts/test-account-recovery.mjs', 'profile']],
   ['authors', ['scripts/test-account-recovery.mjs', 'user']],
   ['login', ['scripts/test-account-recovery.mjs', 'login']],

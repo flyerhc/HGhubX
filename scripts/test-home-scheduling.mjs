@@ -21,7 +21,7 @@ try {
   await context.addInitScript(installFixture, { theme: "light", titles: ["示例一", "示例二", "示例三"] });
   await context.addInitScript(() => {
     const calls = [], pending = [];
-    window.homeSchedulingFixture = { calls, finishFeed(items = [], error = "") {
+    window.homeSchedulingFixture = { calls, provideMedia: false, finishFeed(items = [], error = "") {
       const request = pending.shift();
       if (!request) throw new Error("No pending feed");
       if (error) request.reject(error); else request.resolve({ items, pagination: { page: 1, pages: 1, total: items.length, size: 30 } });
@@ -30,8 +30,28 @@ try {
     window.__TAURI_INTERNALS__.invoke = (command, args = {}) => {
       calls.push({ command, args });
       if (command === "api_feed") return new Promise((resolve, reject) => pending.push({ resolve, reject }));
+      if (window.homeSchedulingFixture.provideMedia && command === "api_play") return Promise.resolve({ id: args.id, ep_num: args.ep, video_url: `https://fixture.invalid/video/${args.id}/${args.ep}.m3u8` });
+      if (window.homeSchedulingFixture.provideMedia && command === "api_video") return Promise.resolve({
+        id: args.id, title: `首页 ${args.id}`, cover: "", tags: [], counts: {}, episode_count: 3, total_episodes: 3,
+        episodes: [1, 2, 3].map(ep_num => ({ ep_num, title: `第 ${ep_num} 集` })),
+      });
       return original(command, args);
     };
+    // The retained-player case needs a successful source. Failed source requests
+    // legitimately retry after returning to the tab and do not prove a remount.
+    Object.defineProperty(window, "MediaSource", { configurable: true, value: undefined });
+    Object.defineProperty(window, "ManagedMediaSource", { configurable: true, value: undefined });
+    const paused = new WeakMap(), source = new WeakMap();
+    Object.defineProperty(HTMLMediaElement.prototype, "paused", { configurable: true, get() { return paused.get(this) ?? true; } });
+    Object.defineProperty(HTMLMediaElement.prototype, "readyState", { configurable: true, get() { return 2; } });
+    Object.defineProperty(HTMLMediaElement.prototype, "src", { configurable: true, get() { return source.get(this) || ""; }, set(value) { source.set(this, value); } });
+    HTMLMediaElement.prototype.load = function () {};
+    HTMLMediaElement.prototype.play = function () {
+      paused.set(this, false);
+      queueMicrotask(() => { if (!paused.get(this)) { this.dispatchEvent(new Event("play")); this.dispatchEvent(new Event("playing")); } });
+      return Promise.resolve();
+    };
+    HTMLMediaElement.prototype.pause = function () { const playing = paused.get(this) === false; paused.set(this, true); if (playing) this.dispatchEvent(new Event("pause")); };
   });
   const nextPaint = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const finish = (page, items = [], error = "") => page.evaluate(([items, error]) => window.homeSchedulingFixture.finishFeed(items, error), [items, error]);
@@ -80,11 +100,17 @@ try {
     await nav.getByRole("button", { name: "我的", exact: true }).click(); assert.equal(await page.getByRole("button", { name: "观看历史", exact: true }).getAttribute("aria-pressed"), "true");
   });
   await run("mounted-player-is-retained", async (page, nav) => {
+    await page.evaluate(() => { window.homeSchedulingFixture.provideMedia = true; });
     await finish(page, [card(101), card(102)]);
-    await page.waitForFunction(() => window.homeSchedulingFixture.calls.some(c => c.command === "api_play" && c.args.id >= 100)); await nextPaint(page);
-    const count = (await calls(page, "api_play")).length;
+    await page.waitForFunction(() => ["101:1", "101:2", "102:1"].every(key => window.homeSchedulingFixture.calls.some(c => c.command === "api_play" && `${c.args.id}:${c.args.ep}` === key)));
+    await page.locator("video").waitFor(); await nextPaint(page);
+    await page.evaluate(() => { window.homeSchedulingFixture.video = document.querySelector("video"); });
+    const playKeys = async () => (await calls(page, "api_play")).map(call => `${call.args.id}:${call.args.ep}`).sort();
+    const before = await playKeys();
+    assert.deepEqual(before, ["101:1", "101:2", "102:1"], "Only the current episode, next episode and next video are requested");
     await nav.getByRole("button", { name: "搜索", exact: true }).click(); await nav.getByRole("button", { name: "首页", exact: true }).click(); await nextPaint(page);
-    assert.equal((await calls(page, "api_play")).length, count, "Visiting another tab must not remount player");
+    assert(await page.evaluate(() => window.homeSchedulingFixture.video === document.querySelector("video")), "Visiting another tab retains the actual video node");
+    assert.deepEqual(await playKeys(), before, "Returning to the tab reuses current and prefetched source addresses");
     assert.equal((await calls(page, "api_feed")).length, 1);
   });
   await run("home-error-retry", async page => {
