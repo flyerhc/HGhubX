@@ -30,6 +30,8 @@ type Props = {
   /** 换源后重新套用，避免切集时音量/倍速被浏览器重置 */
   volume?: number;
   rate?: number;
+  /** 小窗回到这一秒再播。换源时只取当时的值，避免进度更新把流重载一遍。 */
+  startAt?: number;
   onTime?: (t: number) => void;
   onDuration?: (d: number) => void;
   onSize?: (w: number, h: number) => void;
@@ -44,7 +46,7 @@ type Props = {
 
 /** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
 const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
-  { src, poster, autoPlay = true, active = true, diagnosticContext = {}, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
+  { src, poster, autoPlay = true, active = true, diagnosticContext = {}, muted = false, loop = false, fit = "contain", volume = 1, rate = 1, startAt = 0,
     onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onEnded, onError, onClick, className = "" },
   ref,
 ) {
@@ -136,7 +138,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         // Prefer standard MSE on macOS; hls.js handles MMS-only fallback and seek recovery.
         preferManagedMediaSource: false,
         autoStartLoad: false,
-        startPosition: resume?.time ?? -1,
+        startPosition: resume?.time ?? (startAt > 0.2 ? startAt : -1),
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
         backBufferLength: 30,
@@ -189,6 +191,13 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       });
     } else {
       video.src = url;
+      if (startAt > 0.2) {
+        const jump = () => {
+          if (Math.abs(video.currentTime - startAt) > 0.4) video.currentTime = startAt;
+        };
+        if (video.readyState >= 1) jump();
+        else video.addEventListener("loadedmetadata", jump, { once: true });
+      }
       if (autoPlay && !resume) activity.play("native_autoplay", true);
     }
 

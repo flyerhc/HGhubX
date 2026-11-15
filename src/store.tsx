@@ -60,6 +60,21 @@ export type Toast = {
   line?: { region: "cn" | "intl"; host: string; ms: number };
 };
 
+/** 应用内小窗。系统画中画不可用时，视频挂在所有页面上面继续播。 */
+export type MiniPlay = {
+  playKey: string;
+  videoId: number;
+  ep: number;
+  src: string;
+  poster: string;
+  title: string;
+  time: number;
+  rate: number;
+  landscape: boolean;
+};
+
+export type MiniResume = { id: number; playKey: string; videoId: number; ep: number; time: number };
+
 /** 观看记录：看到第几集、第几秒（`dur` 用来判断是否已看完） */
 export type WatchProgress = { id: number; ep: number; t: number; dur: number; at: number };
 
@@ -188,6 +203,12 @@ type Store = {
   searchHist: string[]; addSearch: (q: string) => void; clearSearchHist: () => void;
   strictSecurity: boolean; strictSecurityReady: boolean; securityPending: boolean; cliRelaxed: boolean; setStrictSecurity: (on: boolean) => Promise<void>;
   toasts: Toast[]; toast: (msg: string, icon?: Toast["icon"]) => void;
+  mini: MiniPlay | null;
+  miniResume: MiniResume | null;
+  openMini: (m: MiniPlay) => void;
+  replaceMini: (next: MiniPlay) => void;
+  finishMini: (m: MiniPlay) => void;
+  dismissMini: () => void;
   /** 线路切换计数：变了就让列表页重挂载，重新拉一遍数据 */
   lineEpoch: number;
 };
@@ -213,6 +234,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [loginOpen, setLoginOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [lineEpoch, setLineEpoch] = useState(0);
+  const [mini, setMini] = useState<MiniPlay | null>(null);
+  const [miniResume, setMiniResume] = useState<MiniResume | null>(null);
+  const miniSeq = useRef(1);
   const [theater, setTheaterState] = useState(false);
   const [fs, setFsState] = useState(false);
   const [clean, setCleanState] = useState(false);
@@ -390,6 +414,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setPreferHevc = useCallback((on: boolean) => {
     setP((s) => ({ ...s, preferHevc: on }));
   }, []);
+  const openMini = useCallback((m: MiniPlay) => {
+    setMiniResume(null);
+    setMini(m);
+  }, []);
+  const replaceMini = useCallback((next: MiniPlay) => {
+    setMini((cur) => (cur && cur.videoId === next.videoId ? next : cur));
+  }, []);
+  const finishMini = useCallback((m: MiniPlay) => {
+    const id = miniSeq.current++;
+    setMini(null);
+    setMiniResume({ id, playKey: m.playKey, videoId: m.videoId, ep: m.ep, time: m.time });
+  }, []);
+  const dismissMini = useCallback(() => setMini(null), []);
   const setVolume = useCallback((v: number) => {
     const volume = Math.max(0, Math.min(1, v));
     setP((s) => ({ ...s, volume, muted: volume === 0 }));
@@ -413,10 +450,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     searchHist: p.searchHist, addSearch, clearSearchHist,
     strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast, lineEpoch,
+    mini, miniResume, openMini, replaceMini, finishMini, dismissMini,
   }), [theme, themePreference, setTheme, tab, setTab, stack, push, pop, user, loginOpen, logout,
     p, account,
     setMuted, setMuteOnStartup, setSwipeEp, setPreferHevc, setVolume, addSearch, clearSearchHist, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
-    toasts, toast, lineEpoch, theater, setTheater, fs, setFs, clean, setClean]);
+    toasts, toast, lineEpoch, theater, setTheater, fs, setFs, clean, setClean,
+    mini, miniResume, openMini, replaceMini, finishMini, dismissMini]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

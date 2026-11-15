@@ -498,5 +498,52 @@ html.theme-light .article-body blockquote { background: rgba(43, 40, 36, .045); 
 /* 没有压暗层时的文字保读：近处硬阴影 + 远处柔光，亮画面也不糊 */
 .hg-ov-shadow-strong { text-shadow: 0 1px 3px rgba(0, 0, 0, .92), 0 2px 12px rgba(0, 0, 0, .78); }
 
+/* 应用内小窗：系统画中画不可用时挂在页面上层，切到别的标签也继续播。 */
+.hg-mini {
+  position: fixed;
+  z-index: 90;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .48);
+  touch-action: none;
+}
+.hg-mini-video { position: absolute; inset: 0; pointer-events: none; }
+.hg-mini-close,
+.hg-mini-bar button {
+  position: absolute;
+  z-index: 2;
+  border: 0;
+  color: #fff;
+  background: rgba(0, 0, 0, .55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hg-mini-close {
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+}
+.hg-mini-bar {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.hg-mini-bar button {
+  position: static;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  pointer-events: auto;
+}
+
 
 }
