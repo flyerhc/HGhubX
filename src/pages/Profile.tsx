@@ -43,6 +43,9 @@ function ProfileContent({ wide }: { wide: boolean }) {
   const cards = visibleIds.map(id => cache[id]).filter((card): card is Detail => !!card);
   const failed = failedIds.filter(id => visibleIds.includes(id));
   const idsKey = visibleIds.join(",");
+  const favoriteStateUnknown = tab === "fav" && !!user && accountSync.lastSynced === 0 && favs.length === 0;
+  const favoriteSyncFailed = favoriteStateUnknown && !accountSync.busy && !!accountSync.error;
+  const syncingFavorites = favoriteStateUnknown && !favoriteSyncFailed;
   /** 观看记录里这条的进度（收藏页没有） */
   const progressOf = (id: number) => (tab === "history" ? history.find((h) => h.id === id) : undefined);
 
@@ -172,7 +175,13 @@ function ProfileContent({ wide }: { wide: boolean }) {
         </SegmentedControl>
 
         <div className="mt-3" aria-busy={loading}>
-          {loading && !cards.length ? (
+          {favoriteSyncFailed ? (
+            <Empty icon={<IStar size={24} />} title="收藏状态未知"
+              sub="账号同步未完成，暂时无法确认收藏内容。" action="重试"
+              onAction={() => { void syncAccount().catch(() => {}); }} />
+          ) : syncingFavorites ? (
+            <FavoriteSyncState wide={wide} />
+          ) : loading && !cards.length ? (
             <div className="flex justify-center py-8"><Loader className="w-7 h-7 spinner" /></div>
           ) : cards.length ? (
             <div className={`ios-media-grid ${wide ? "is-wide" : ""}`}>
@@ -242,4 +251,23 @@ function ProfileContent({ wide }: { wide: boolean }) {
       </Modal>
     </div>
   );
+}
+
+function FavoriteSyncState({ wide }: { wide: boolean }) {
+  return <>
+    <div role="status" aria-live="polite" aria-label="正在同步收藏"
+      className="mb-4 flex items-center justify-center gap-2.5 text-[13px] text-mut">
+      <span aria-hidden="true" className="ios-loader spinner w-5 h-5" />
+      <span>正在同步收藏…</span>
+    </div>
+    <div aria-hidden="true" className={`ios-media-grid ${wide ? "is-wide" : ""}`}>
+      {[0, 1, 2, 3].map(index => (
+        <div key={index} className="min-w-0">
+          <div className="aspect-[3/4] w-full rounded-[22px] bg-s3 animate-pulse" />
+          <div className="mt-2.5 h-3.5 w-4/5 rounded-full bg-s3 animate-pulse" />
+          <div className="mt-2 h-3 w-1/2 rounded-full bg-s2 animate-pulse" />
+        </div>
+      ))}
+    </div>
+  </>;
 }
