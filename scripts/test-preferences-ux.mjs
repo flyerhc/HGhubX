@@ -143,7 +143,7 @@ try {
     }
     await settledMenuLayout(dialog);
     const before = { dialog: await bounds(dialog), close: await bounds(close), confirm: await bounds(confirm) };
-    const measurement = { name: `menu-${viewport.width}`, compact, before, after: null, scrollBefore: null, scrollAfter: null };
+    const measurement = { name: `menu-${viewport.width}`, compact, before, after: null, scrollBefore: null, scrollAfter: null, confirmTopDelta: null };
     report.measurements.push(measurement);
     for (const [label, r] of Object.entries(before)) assert(inside(r, viewport.width, viewport.height), `${label} stays inside viewport`);
     assert(await actionable(close) && await actionable(confirm), "Header/footer controls are not covered before scrolling");
@@ -156,6 +156,7 @@ try {
     const after = await bounds(confirm);
     measurement.after = { dialog: await bounds(dialog), close: await bounds(close), confirm: after };
     measurement.scrollAfter = await scroll.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight, clientHeight: el.clientHeight }));
+    measurement.confirmTopDelta = after.top - before.confirm.top;
     assert(Math.abs(after.top - before.confirm.top) < 1, "Confirm remains fixed when tags scroll");
     assert(await actionable(close) && await actionable(confirm), "Header/footer remain usable after scrolling");
     assert(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1), "Long unbroken tags stay in dialog width");
