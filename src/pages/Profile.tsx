@@ -42,8 +42,9 @@ function ProfileContent({ wide }: { wide: boolean }) {
   const cards = visibleIds.map(id => cache[id]).filter((card): card is Detail => !!card);
   const failed = failedIds.filter(id => visibleIds.includes(id));
   const idsKey = visibleIds.join(",");
-  const syncingFavorites = tab === "fav" && !!user && accountSync.busy
-    && accountSync.lastSynced === 0 && favs.length === 0;
+  const favoriteStateUnknown = tab === "fav" && !!user && accountSync.lastSynced === 0 && favs.length === 0;
+  const favoriteSyncFailed = favoriteStateUnknown && !accountSync.busy && !!accountSync.error;
+  const syncingFavorites = favoriteStateUnknown && !favoriteSyncFailed;
   /** 观看记录里这条的进度（收藏页没有） */
   const progressOf = (id: number) => (tab === "history" ? history.find((h) => h.id === id) : undefined);
 
@@ -172,7 +173,11 @@ function ProfileContent({ wide }: { wide: boolean }) {
         </SegmentedControl>
 
         <div className="mt-3" aria-busy={loading}>
-          {syncingFavorites ? (
+          {favoriteSyncFailed ? (
+            <Empty icon={<IStar size={24} />} title="收藏状态未知"
+              sub="账号同步未完成，暂时无法确认收藏内容。" action="重试"
+              onAction={() => { void syncAccount().catch(() => {}); }} />
+          ) : syncingFavorites ? (
             <FavoriteSyncState wide={wide} />
           ) : loading && !cards.length ? (
             <div className="flex justify-center py-8"><Loader className="w-7 h-7 spinner" /></div>

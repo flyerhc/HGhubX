@@ -17,24 +17,30 @@ try {
   const origin = vite.resolvedUrls.local[0];
   browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || "/usr/bin/google-chrome" });
 
-  const openDelayedProfile = async favoriteIds => {
+  const openProfile = async ({ favoriteIds = [], delaySync = false, rejectFirstSync = false } = {}) => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
     await context.addInitScript(installFixture, { theme: "light", titles: ["城市与晚风", "重逢在夏日以后", "星河旅人"] });
-    await context.addInitScript(favoriteIds => {
+    await context.addInitScript(options => {
       localStorage.setItem("hghubx_usage_agreement", JSON.stringify({
         version: "2026-11-15-v1", accepted: true, acceptedAt: "2026-11-15T00:00:00.000Z",
       }));
       const original = window.__TAURI_INTERNALS__.invoke;
       const user = {
         id: 9, username: "fixture", nickname: "示例用户", avatar: "", avatar_color: "#63748b",
-        counts: { like: 2, collect: favoriteIds.length, following: 4 },
+        counts: { like: 2, collect: options.favoriteIds.length, following: 4 },
       };
-      window.__ACCOUNT_SYNC_GATE__ = new Promise(resolve => { window.__releaseAccountSync__ = resolve; });
+      window.__ALLOW_SYNC_SUCCESS__ = !options.rejectFirstSync;
+      window.__API_ME_CALLS__ = 0;
+      window.__ACCOUNT_SYNC_GATE__ = options.delaySync
+        ? new Promise(resolve => { window.__releaseAccountSync__ = resolve; })
+        : Promise.resolve();
       window.__TAURI_INTERNALS__.invoke = async (command, args = {}) => {
         if (command === "app_boot") return { user, logged_in: true, base: "https://fixture.invalid", strict_security: true };
         if (command === "api_me") {
           await window.__ACCOUNT_SYNC_GATE__;
-          return { user, interactions: { favorite_video_ids: favoriteIds }, origin: "https://fixture.invalid" };
+          window.__API_ME_CALLS__ += 1;
+          if (!window.__ALLOW_SYNC_SUCCESS__) throw new Error("模拟账号同步失败");
+          return { user, interactions: { favorite_video_ids: options.favoriteIds }, origin: "https://fixture.invalid" };
         }
         if (command === "api_account_history") {
           await window.__ACCOUNT_SYNC_GATE__;
@@ -42,7 +48,7 @@ try {
         }
         return original(command, args);
       };
-    }, favoriteIds);
+    }, { favoriteIds, delaySync, rejectFirstSync });
     const page = await context.newPage();
     page.on("pageerror", error => report.errors.push(error.message));
     await page.route("**/*", route => {
@@ -58,7 +64,7 @@ try {
   };
 
   {
-    const { context, page } = await openDelayedProfile([1]);
+    const { context, page } = await openProfile({ favoriteIds: [1], delaySync: true });
     const syncing = page.getByRole("status", { name: "正在同步收藏", exact: true });
     await syncing.waitFor();
     assert.equal(await page.getByText("还没有收藏", { exact: true }).count(), 0,
@@ -71,7 +77,7 @@ try {
   }
 
   {
-    const { context, page } = await openDelayedProfile([]);
+    const { context, page } = await openProfile({ delaySync: true });
     const syncing = page.getByRole("status", { name: "正在同步收藏", exact: true });
     await syncing.waitFor();
     assert.equal(await page.getByText("还没有收藏", { exact: true }).count(), 0,
@@ -80,6 +86,23 @@ try {
     await page.getByText("还没有收藏", { exact: true }).waitFor();
     assert.equal(await syncing.count(), 0);
     report.checks.push("after a successful empty sync, the confirmed empty state is shown");
+    await context.close();
+  }
+
+  {
+    const { context, page } = await openProfile({ rejectFirstSync: true });
+    const unknown = page.getByText("收藏状态未知", { exact: true });
+    await unknown.waitFor();
+    assert.equal(await page.getByText("还没有收藏", { exact: true }).count(), 0,
+      "A failed first sync must not present favorites as confirmed empty");
+    const callsBeforeRetry = await page.evaluate(() => window.__API_ME_CALLS__);
+    await page.evaluate(() => { window.__ALLOW_SYNC_SUCCESS__ = true; });
+    await page.getByRole("button", { name: "重试", exact: true }).click();
+    await page.getByText("还没有收藏", { exact: true }).waitFor();
+    assert.equal(await unknown.count(), 0, "Successful retry replaces the unknown state");
+    assert.equal(await page.evaluate(calls => window.__API_ME_CALLS__ > calls, callsBeforeRetry), true,
+      "Retry invokes account synchronization again");
+    report.checks.push("failed first sync shows unknown with retry, then a successful retry confirms the empty state");
     await context.close();
   }
 
