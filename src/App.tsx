@@ -9,6 +9,7 @@ import Home from "./pages/Home";
 import Feed from "./components/Feed";
 import LoginModal from "./components/LoginModal";
 import { ToastHost } from "./components/ui";
+import MiniPlayer from "./components/MiniPlayer";
 import { DesktopRail, DesktopTitleBar } from "./components/DesktopChrome";
 import ResizeHandles from "./components/ResizeHandles";
 import { tracePlayback } from "./playbackDiagnostics";
@@ -333,6 +334,7 @@ export default function App() {
     <>
       {isMobile ? <MobileShell /> : <DesktopShell />}
       <LoginModal />
+      <MiniPlayer />
       <ToastHost />
     </>
   );

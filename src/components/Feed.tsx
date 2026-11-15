@@ -13,6 +13,7 @@ import PlaybackLock from "./PlaybackLock";
 import { ArticlePanel, CommentsPanel, EpisodesPanel } from "./Panels";
 import { setBackHandler } from "../back";
 import { copyText } from "../clipboard";
+import { exitSystemPip, readMiniClock, systemPipActive, trySystemPip } from "../pip";
 import { tracePlayback } from "../playbackDiagnostics";
 import { createPlaybackClock } from "../playbackClock";
 import { useContentPreferences } from "../contentPreferences";
@@ -24,7 +25,7 @@ import { getHoldZone, HOLD_DELAY_MS, HOLD_LOCK_DISTANCE, type HoldZone } from ".
 import { useMobileHoldGuide } from "../useMobileHoldGuide";
 import {
   IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IFileText, IHeart, IHeartF, IMore,
-  ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
+  ILink, IList, ILockF, IPauseF, IPip, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
 } from "../icons";
 
 type Props = {
@@ -254,6 +255,41 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const mainUrl = playUrls[playKey] || "";
   const hevcUrl = hevcUrls[playKey] || "";
   const playUrl = preferHevc && hevcUrl ? hevcUrl : mainUrl;
+  const miniResume = store.miniResume;
+  const resumeCmd = useRef(0);
+  const appliedResume = useRef(0);
+  useEffect(() => {
+    if (!active || !miniResume || store.mini) return;
+    if (!videoIds.includes(miniResume.videoId) || resumeCmd.current === miniResume.id) return;
+    resumeCmd.current = miniResume.id;
+    const i = videoIds.indexOf(miniResume.videoId);
+    if (i >= 0 && videoIds[index] !== miniResume.videoId) setPosition({ id: miniResume.videoId, index: i });
+    setEpMap((m) => (m[miniResume.videoId] === miniResume.ep ? m : { ...m, [miniResume.videoId]: miniResume.ep }));
+    // 只在点「返回」时跳一次，避免之后翻页被拉回去。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, miniResume, store.mini, videoIds]);
+  useEffect(() => {
+    if (!active || !miniResume || store.mini || miniResume.playKey !== playKey) return;
+    if (appliedResume.current === miniResume.id) return;
+    let n = 0;
+    let timer = 0;
+    const tick = () => {
+      const v = videoRef.current?.el();
+      if (v && v.readyState >= 1) {
+        appliedResume.current = miniResume.id;
+        videoRef.current?.seek(miniResume.time, "mini_return");
+        return;
+      }
+      n += 1;
+      if (n > 16) {
+        appliedResume.current = miniResume.id;
+        return;
+      }
+      timer = window.setTimeout(tick, 150);
+    };
+    tick();
+    return () => window.clearTimeout(timer);
+  }, [active, miniResume, playKey, store.mini]);
   // 等播放画面就绪再提示，启动动画/协议、加载失败和其他面板不叠加教程。
   const showHoldGuide = !isDesktop && !holdGuide.seen && active && allowed
     && !!playUrl && duration > 0 && !err && !panel && !tagMenu && !controlsLocked;
@@ -1020,15 +1056,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     setBarPct(null);
   };
 
-  const togglePip = async () => {
-    try {
-      const v = videoRef.current?.el();
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else if (v && document.pictureInPictureEnabled) await v.requestPictureInPicture();
-      else toast("当前环境不支持画中画", "info");
-    } catch { toast("画中画开启失败", "info"); }
-  };
-
   const actionIsCurrent = () => mounted.current && actionContext.current.accountScope === accountScope && actionContext.current.lineEpoch === store.lineEpoch
     && actionContext.current.id === curId && actionContext.current.ep === curEp && actionContext.current.kind === kind;
 
@@ -1078,6 +1105,40 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const pickEp = (ep: number) => {
     setEpMap((m) => ({ ...m, [curId]: ep }));
     setPanel(null);
+  };
+
+  const togglePip = async () => {
+    if (store.mini?.playKey === playKey) {
+      const time = readMiniClock(store.mini.time);
+      if (store.stack.length === 0) store.setTab("home");
+      setFs(false);
+      store.finishMini({ ...store.mini, time });
+      return;
+    }
+    const v = videoRef.current?.el() ?? null;
+    if (v && systemPipActive(v)) {
+      await exitSystemPip(v);
+      return;
+    }
+    if (v) {
+      try {
+        if (await trySystemPip(v)) return;
+      } catch { /* 系统小窗不可用时改走应用内小窗 */ }
+    }
+    if (!playUrl) { toast("还没有可播放的视频", "info"); return; }
+    const now = v?.currentTime;
+    if (fs) setFs(false);
+    store.openMini({
+      playKey,
+      videoId: curId,
+      ep: curEp,
+      src: playUrl,
+      poster: posterUrl,
+      title: meta.title || "",
+      time: typeof now === "number" && Number.isFinite(now) ? now : 0,
+      rate: effRate,
+      landscape: landscapeVideo,
+    });
   };
 
   const likeCount = useMemo(() => {
@@ -1160,7 +1221,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           }
           return (
             <section key={vid} className={sectionClass} inert={!isActive || undefined} aria-hidden={!isActive || undefined}>
-              {isActive && playUrl ? (
+              {isActive && playUrl && !store.mini ? (
                 <div ref={holdTargetRef} data-mobile-hold-target={!isDesktop || undefined}
                   className="absolute inset-0" style={{ touchAction: swipeEp ? "none" : "pan-y" }}
                   onPointerDown={onDown} onPointerMove={onMove} onPointerUp={(e) => onUp(false, e)} onPointerCancel={(e) => onUp(true, e)} onLostPointerCapture={(e) => onUp(true, e)}>
@@ -1315,6 +1376,10 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                     <ICommentF size={26} className="hg-ink hg-ov-shadow" />
                     <span className="text-[12px] hg-ink-2 hg-ov-shadow tabular-nums">{fmt(meta.comment)}</span>
                   </Button>
+                  <Button onClick={() => { void togglePip(); }} className="flex flex-col items-center gap-1 pressable" aria-label="小窗播放">
+                    <IPip size={26} className="hg-ink hg-ov-shadow" />
+                    <span className="text-[12px] hg-ink-2 hg-ov-shadow">小窗</span>
+                  </Button>
                   <Button onClick={() => enterFs(isLandscapeCurrent())} className="flex flex-col items-center gap-1 pressable" aria-label="全屏">
                     <IExpand size={26} className="hg-ink hg-ov-shadow" />
                     <span className="text-[12px] hg-ink-2 hg-ov-shadow">全屏</span>
@@ -1365,6 +1430,10 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   </>
                 )}
 
+                <Button onClick={() => { void togglePip(); }} aria-label="小窗播放" className="flex flex-col items-center gap-1 pressable">
+                  <IPip size={25} className="text-white tsh" />
+                  <span className="text-[12px] text-white/90">小窗</span>
+                </Button>
                 <Button onClick={shareLink} aria-label="分享" className="flex flex-col items-center gap-1 pressable">
                   <ILink size={25} className="text-white tsh" />
                   <span className="text-[12px] text-white/90">分享</span>
@@ -1581,6 +1650,10 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               {paused ? <IPlayF size={18} /> : <IPauseF size={17} />}
             </Button>
             <PlaybackTime clock={playbackClock} className="shrink-0 text-[12px] font-semibold hg-ink-2 tabular-nums" />
+            <Button onClick={() => { void togglePip(); }} aria-label="小窗播放"
+              className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center hg-chip hg-ink-2 pressable">
+              <IPip size={15} />
+            </Button>
             <Button
               onClick={() => {
                 if (speedLock) { setSpeedLock(false); return; }

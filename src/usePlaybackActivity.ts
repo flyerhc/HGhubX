@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, type RefObject } from "react";
 import type Hls from "hls.js";
+import { systemPipActive } from "./pip";
 
 /** Keep asynchronous autoplay and error recovery subject to the latest page activity. */
 export function usePlaybackActivity(
@@ -15,7 +16,7 @@ export function usePlaybackActivity(
   const play = useCallback((source: string, automatic = false) => {
     const v = videoRef.current;
     if (!v) return;
-    if (!mounted.current || !latest.current.active || (automatic && !wanted.current)) {
+    if (!mounted.current || (!latest.current.active && !systemPipActive(v)) || (automatic && !wanted.current)) {
       latest.current.trace("play.blocked", { source, inactive: !latest.current.active, play_wanted: wanted.current });
       return;
     }
@@ -25,7 +26,7 @@ export function usePlaybackActivity(
     latest.current.trace("play.request", { source });
     v.play().then(() => {
       // The page may have changed while play() was pending.
-      if (!mounted.current || !latest.current.active) v.pause();
+      if (!mounted.current || (!latest.current.active && !systemPipActive(v))) v.pause();
     }).catch(e => latest.current.trace("play.rejected", { source, error_name: e?.name }));
   }, []);
   const pause = useCallback((source = "handle") => {
@@ -40,6 +41,10 @@ export function usePlaybackActivity(
     mounted.current = true;
     const hls = hlsRef.current;
     if (!active) {
+      if (systemPipActive(v)) {
+        previous.current = active;
+        return;
+      }
       // Include pauses made through native/PiP controls, which bypass our buttons.
       if (v.readyState >= 2) wanted.current = !v.paused;
       v.pause();
@@ -57,14 +62,19 @@ export function usePlaybackActivity(
     const v = videoRef.current;
     if (!v) return;
     const guard = () => {
-      if (latest.current.active) return;
+      if (latest.current.active || systemPipActive(v)) return;
       latest.current.trace("play.blocked", { source: "media_event", inactive: true });
       v.pause();
       if (hlsRef.current?.levels.length) hlsRef.current.stopLoad();
     };
     v.addEventListener("play", guard);
     v.addEventListener("playing", guard);
-    return () => { mounted.current = false; v.removeEventListener("play", guard); v.removeEventListener("playing", guard); v.pause(); };
+    return () => {
+      mounted.current = false;
+      v.removeEventListener("play", guard);
+      v.removeEventListener("playing", guard);
+      if (!systemPipActive(v)) v.pause();
+    };
   }, []);
   return { play, pause, isActive: () => mounted.current && latest.current.active, isPlayWanted: () => wanted.current };
 }
