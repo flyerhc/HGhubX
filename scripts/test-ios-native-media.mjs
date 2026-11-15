@@ -22,7 +22,9 @@ let passed = 0;
 const pageErrors = [];
 
 try {
-  vite = await createServer({ root, resolve: { alias: [{ find: /^hls\.js$/, replacement: join(root, "tests/ios-native-hls.ts") }] }, server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  // The parent playback runner can have its own Vite server alive with real hls.js.
+  // Keep this mocked dependency graph out of that server's optimized-dependency cache.
+  vite = await createServer({ root, cacheDir: join(root, "node_modules/.vite-ios-native"), resolve: { alias: [{ find: /^hls\.js$/, replacement: join(root, "tests/ios-native-hls.ts") }] }, server: { host: "127.0.0.1", port: 0, strictPort: false } });
   await vite.listen();
   const origin = vite.resolvedUrls.local[0];
   let executablePath = process.env.BROWSER_EXECUTABLE;
@@ -154,7 +156,10 @@ try {
       const { context, page } = await open(component, { hold: true, autoPlay: false });
       await page.waitForFunction(() => window.nativeMediaFixture.waiters.length === 1);
       assert.deepEqual((await snapshot(page)).plays, [], "autoPlay=false waits for user intent");
-      await page.getByRole("button", { name: "播放", exact: true }).first().click();
+      const play = component === "player"
+        ? page.getByRole("group", { name: "播放控制", exact: true }).getByRole("button", { name: "播放", exact: true })
+        : page.getByRole("button", { name: "播放", exact: true });
+      await play.click();
       assert.deepEqual((await snapshot(page)).plays, [null], "manual play attempts the pending source and records playback intent");
       await resolveOrigin(page, 0);
       assert.deepEqual((await snapshot(page)).plays, [null, `${ORIGIN}/hls?u=${encodeURIComponent(UPSTREAM)}`], "manual playback resumes after async native origin resolves even when autoPlay=false");
