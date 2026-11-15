@@ -80,6 +80,12 @@ async function clickProgress(page, fraction) {
   const r = await input.boundingBox(); assert(r, "Seekbar missing");
   await page.mouse.click(r.x + r.width * fraction, r.y + r.height / 2);
 }
+async function wakeFeedControls(page) {
+  const root = page.locator(".player-root");
+  const bounds = await root.boundingBox(); assert(bounds, "Feed player missing");
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.waitForFunction(() => !document.querySelector(".player-root")?.classList.contains("is-idle"));
+}
 async function loadPlayer(page, legacy = false, extra = "") {
   await page.goto(`${report.ui}/tests/player-seek.html?diagnostics=1&proxy=${encodeURIComponent(report.media)}${legacy ? "&legacy=1" : ""}${extra}`);
   await page.waitForFunction(() => document.querySelector("video")?.currentTime > 1);
@@ -346,12 +352,14 @@ async function lifecyclePlayerCheck(page, legacy) {
     assert(!logs.some(e => e.event === "hlsFragLoading"), "Hidden manifest must not start fragment loading");
     await page.evaluate(() => window.playerSeekFixture.setActive(true));
     await page.waitForFunction(() => document.querySelector("video").currentTime > 1 && !document.querySelector("video").paused);
+    if (!legacy) await wakeFeedControls(page);
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await page.evaluate(() => window.playerSeekFixture.setActive(false));
     await page.waitForFunction(() => !window.playerSeekFixture.engineState().loading);
     await page.evaluate(() => window.playerSeekFixture.setActive(true));
     await page.waitForFunction(() => !document.querySelector('input[aria-label="播放进度"]').disabled);
     assert(await page.locator("video").evaluate(v => v.paused), "Manual pause must survive page reactivation");
+    if (!legacy) await wakeFeedControls(page);
     await page.getByRole("button", { name: "播放", exact: true }).first().click();
     await page.waitForFunction(() => !document.querySelector("video").paused);
     await page.locator("video").evaluate(v => v.pause());
