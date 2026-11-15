@@ -6,6 +6,7 @@ import { Modal, Toggle } from "../components/ui";
 import LinePicker from "../components/LinePicker";
 import ProxySettings from "../components/ProxySettings";
 import ContentPreferencesSettings from "../components/ContentPreferencesSettings";
+import DownloadLibrary from "../components/DownloadLibrary";
 import SettingsSection from "../components/SettingsSection";
 import { UsageAgreementText } from "../components/UsageAgreement";
 import { USAGE_AGREEMENT_VERSION } from "../usageAgreement";
@@ -22,7 +23,7 @@ const GROUP_SUMMARIES: Record<SettingGroup, string> = {
   外观: "跟随系统、浅色与深色",
   播放: "启动静音与画质偏好",
   内容偏好: "标签屏蔽与内容显示",
-  本地数据: "收藏、观看记录与缓存",
+  本地数据: "收藏、观看记录、下载与缓存",
   网络: "代理、线路与连接诊断",
   播放诊断: "详细日志与问题排查",
   其他: "检查更新、使用协议与关于应用",
@@ -175,6 +176,7 @@ export default function Settings({ onBack, initialSection }: { onBack: () => voi
                 <div className="text-[12px] text-mut">{favs.length} 部收藏 · {history.length} 条观看记录</div>
               </div>
             </div>
+            <DownloadLibrary />
             <Button onClick={() => { setClearError(""); setClearOpen(true); }} className="w-full flex items-center gap-3 px-3.5 py-3 text-left pressable">
               <span className="ios-setting-icon"><IBroom size={16} /></span>
               <div className="flex-1">

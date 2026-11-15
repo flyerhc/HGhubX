@@ -1,4 +1,5 @@
 mod api;
+mod download;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 mod apple_proxy;
 mod env;
@@ -13,6 +14,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod media;
+mod ts_mp4;
 mod media_dns;
 mod net;
 mod network_policy;
@@ -256,6 +258,11 @@ pub fn run() {
             api::api_like,
             api::api_collect,
             api::api_follow,
+            download::download_media,
+            download::list_downloads,
+            download::delete_download,
+            download::export_download,
+            download::play_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

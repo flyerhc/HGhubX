@@ -2,6 +2,7 @@ import { Button, Image, SegmentedControl } from "./ios/controls";
 import { Loader } from "./ios/effects";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { api, cover, fmt, fmtTime, isMobile, logLine } from "../api";
 import type { Detail, Episode, PlayInfo, Post, VideoCard } from "../types";
 import { useStore } from "../store";
@@ -23,7 +24,7 @@ import MobileHoldGuide from "./MobileHoldGuide";
 import { getHoldZone, HOLD_DELAY_MS, HOLD_LOCK_DISTANCE, type HoldZone } from "../mobileHold";
 import { useMobileHoldGuide } from "../useMobileHoldGuide";
 import {
-  IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IFileText, IHeart, IHeartF, IMore,
+  IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IDownload, IExpand, IFileText, IHeart, IHeartF, IMore,
   ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
 } from "../icons";
 
@@ -336,6 +337,39 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const shareLink = () => {
     const u = kind === "post" ? (posts[curId]?.video_url || meta.title) : `https://huangguoai.com/video/${curId}/`;
     copyText(u).then(() => toast("链接已复制", "ok")).catch(() => toast("复制失败", "info"));
+  };
+
+  const [downloadJob, setDownloadJob] = useState<{ key: string; pct: number } | null>(null);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ key: string; done: number; total: number }>("download-progress", (event) => {
+      const total = event.payload.total || 1;
+      const pct = Math.max(0, Math.min(100, Math.round(event.payload.done * 100 / total)));
+      const key = event.payload.key;
+      setDownloadJob((job) => (job && job.key === key && job.pct !== pct ? { key, pct } : job));
+    }).then((stop) => { unlisten = stop; }).catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
+  const downloading = downloadJob?.key === playKey;
+  const downloadCurrent = () => {
+    const url = kind === "post" ? posts[curId]?.video_url?.trim() : playUrl;
+    if (!url || !url.startsWith("http")) { toast("还没有可下载的视频", "info"); return; }
+    if (downloadJob) {
+      if (downloadJob.key !== playKey) toast("有视频正在下载", "info");
+      return;
+    }
+    const key = playKey;
+    setDownloadJob({ key, pct: 0 });
+    const label = `${meta.title || "视频"} 第${curEp}集`;
+    invoke<string>("download_media", { url, name: label, key })
+      .then(() => {
+        setDownloadJob((job) => (job?.key === key ? null : job));
+        toast(isMobile ? "已保存，可在「文件」App 的 HGhubX 里查看" : "已保存到下载文件夹", "ok");
+      })
+      .catch((error) => {
+        setDownloadJob((job) => (job?.key === key ? null : job));
+        toast(typeof error === "string" ? error : "下载失败", "info");
+      });
   };
 
   /* 倍速：中心小方块打开偏好，外侧右上 2.0x / 左下 0.5x。 */
@@ -1323,6 +1357,10 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                     <ILink size={25} className="hg-ink hg-ov-shadow" />
                     <span className="text-[12px] hg-ink-2 hg-ov-shadow">分享</span>
                   </Button>
+                  <Button onClick={downloadCurrent} disabled={downloading} className="flex flex-col items-center gap-1 pressable" aria-label="下载当前集">
+                    <IDownload size={25} className="hg-ink hg-ov-shadow" />
+                    <span className="text-[12px] hg-ink-2 hg-ov-shadow tabular-nums text-center inline-block w-9 whitespace-nowrap">{downloading ? `${downloadJob?.pct ?? 0}%` : "下载"}</span>
+                  </Button>
                 </div>
               )}
 
@@ -1368,6 +1406,10 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 <Button onClick={shareLink} aria-label="分享" className="flex flex-col items-center gap-1 pressable">
                   <ILink size={25} className="text-white tsh" />
                   <span className="text-[12px] text-white/90">分享</span>
+                </Button>
+                <Button onClick={downloadCurrent} disabled={downloading} aria-label="下载当前集" className="flex flex-col items-center gap-1 pressable">
+                  <IDownload size={25} className="text-white tsh" />
+                  <span className="text-[12px] text-white/90 tabular-nums text-center inline-block w-9 whitespace-nowrap">{downloading ? `${downloadJob?.pct ?? 0}%` : "下载"}</span>
                 </Button>
               </div>
               )}
