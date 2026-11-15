@@ -231,6 +231,7 @@ pub async fn line_auto() -> Result<Value, String> {
         && pick.get("reason").and_then(Value::as_str) != Some("all-down")
         && !chosen.is_empty() && chosen != previous {
         let next = crate::net::set_base(&chosen)?;
+        crate::net::refresh_client();
         switched = next != previous;
     }
     Ok(json!({
@@ -258,6 +259,7 @@ pub async fn line_try_main() -> Result<Value, String> {
         let chosen = probe.get("base").and_then(Value::as_str).unwrap_or_default();
         if !chosen.is_empty() && chosen != previous {
             let next = crate::net::set_base(chosen)?;
+            crate::net::refresh_client();
             switched = next != previous;
         }
     }
