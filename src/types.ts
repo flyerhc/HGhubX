@@ -82,11 +82,11 @@ export type Comment = {
   avatar: string;
   avatar_color: string;
   text: string;
-  time?: string;
+  time: string;
   created_at?: string;
   like_count: number;
   liked: boolean;
-  reply_count?: number;
+  reply_count: number;
   reply_id: number;
   reply_list?: Comment[];
   is_pinned?: boolean;
