@@ -1159,7 +1159,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
             return <section key={vid} className={sectionClass} aria-hidden="true" />;
           }
           return (
-            <section key={vid} className={sectionClass}>
+            <section key={vid} className={sectionClass} inert={!isActive || undefined} aria-hidden={!isActive || undefined}>
               {isActive && playUrl ? (
                 <div ref={holdTargetRef} data-mobile-hold-target={!isDesktop || undefined}
                   className="absolute inset-0" style={{ touchAction: swipeEp ? "none" : "pan-y" }}

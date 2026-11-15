@@ -102,8 +102,10 @@ try {
     if (await page.getByRole('button', { name: '内容偏好设置', exact: true }).getAttribute('aria-expanded') === 'false')
       await page.getByRole('button', { name: '内容偏好设置', exact: true }).click();
     await page.getByRole('switch', { name: '暂停全部屏蔽', exact: true }).click();
-    await page.getByRole('button', { name: '返回', exact: true }).click();
-    await page.getByRole('button', { name: '返回', exact: true }).click();
+    await page.locator('[data-settings-header]').getByRole('button', { name: '返回', exact: true }).click();
+    const playerBack = page.getByRole('button', { name: '返回', exact: true });
+    assert.equal(await playerBack.count(), 1, 'Only the active video exposes controls; offscreen neighbours stay out of keyboard and assistive navigation');
+    await playerBack.click();
     await results.getByRole('button', { name: '中性故事', exact: true }).click();
     await page.waitForFunction(() => window.preferenceJourney.calls.some(call => call.command === 'api_play' && call.args.id === 1));
     const preferences = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);

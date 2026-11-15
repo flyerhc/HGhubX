@@ -102,12 +102,20 @@ try {
   await run("mounted-player-is-retained", async (page, nav) => {
     await page.evaluate(() => { window.homeSchedulingFixture.provideMedia = true; });
     await finish(page, [card(101), card(102)]);
-    await page.waitForFunction(() => ["101:1", "101:2", "102:1"].every(key => window.homeSchedulingFixture.calls.some(c => c.command === "api_play" && `${c.args.id}:${c.args.ep}` === key)));
+    await page.waitForFunction(() => window.homeSchedulingFixture.calls.some(call => call.command === "api_play"));
+    // Home shuffles its first page. Derive the expected prefetches from the
+    // selected video rather than assuming that the API's first item stays first.
+    const firstPlay = (await calls(page, "api_play"))[0].args;
+    assert([101, 102].includes(firstPlay.id), "The current video belongs to the loaded feed");
+    assert.equal(firstPlay.ep, 1, "The current video starts at its first episode");
+    const nextId = firstPlay.id === 101 ? 102 : 101;
+    const expectedKeys = [`${firstPlay.id}:1`, `${firstPlay.id}:2`, `${nextId}:1`].sort();
+    await page.waitForFunction(keys => keys.every(key => window.homeSchedulingFixture.calls.some(c => c.command === "api_play" && `${c.args.id}:${c.args.ep}` === key)), expectedKeys);
     await page.locator("video").waitFor(); await nextPaint(page);
     await page.evaluate(() => { window.homeSchedulingFixture.video = document.querySelector("video"); });
     const playKeys = async () => (await calls(page, "api_play")).map(call => `${call.args.id}:${call.args.ep}`).sort();
     const before = await playKeys();
-    assert.deepEqual(before, ["101:1", "101:2", "102:1"], "Only the current episode, next episode and next video are requested");
+    assert.deepEqual(before, expectedKeys, "Only the current episode, next episode and next video are requested");
     await nav.getByRole("button", { name: "搜索", exact: true }).click(); await nav.getByRole("button", { name: "首页", exact: true }).click(); await nextPaint(page);
     assert(await page.evaluate(() => window.homeSchedulingFixture.video === document.querySelector("video")), "Visiting another tab retains the actual video node");
     assert.deepEqual(await playKeys(), before, "Returning to the tab reuses current and prefetched source addresses");
