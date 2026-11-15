@@ -1210,7 +1210,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
           <div ref={barRef} className="relative h-full" style={{ touchAction: "none" }}
             onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
             <div className="absolute inset-x-0 bottom-[8px] h-[2.5px] rounded-full" style={{ background: "rgba(255,255,255,.3)" }}>
-              <div className="h-full rounded-full bg-white" style={{ width: `${barProgress * 100}%` }} />
+              {duration > 0 && cacheRanges.map((range, i) => <span key={i} className="absolute h-full bg-primary/40" style={{ left: `${Math.max(0, range.start / duration) * 100}%`, width: `${Math.max(0, Math.min(duration, range.end) - Math.max(0, range.start)) / duration * 100}%` }} />)}
+              <div className="relative h-full rounded-full bg-white" style={{ width: `${barProgress * 100}%` }} />
             </div>
           </div>
         </div>
