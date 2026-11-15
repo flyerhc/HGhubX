@@ -6,6 +6,7 @@ import { attachPlaybackCache, attachDirectCache, type CacheRange } from "../play
 import { isLocalMedia, platform, mediaUrl } from "../api";
 import { mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
+import { useProxyPlaybackRecovery } from "../useProxyPlaybackRecovery";
 
 export type VideoHandle = {
   el: () => HTMLVideoElement | null;
@@ -69,6 +70,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   const [ready, setReady] = useState(false);
   const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, active, resource: mediaResource(src) });
   const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay, src, trace });
+  const proxyRecovery = useProxyPlaybackRecovery(videoRef, src, activity, trace);
 
   const reportSizeAndDuration = (v: HTMLVideoElement) => {
     if (v.duration && Number.isFinite(v.duration) && v.duration > 0) {
@@ -170,6 +172,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       window.clearTimeout(recoverTimerRef.current);
       recoverTimerRef.current = null;
     }
+    const resume = proxyRecovery.resume();
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
     const proxied = isLocalMedia(src);
@@ -202,6 +205,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         preferManagedMediaSource: false,
         autoStartLoad: false,
         lowLatencyMode: false,
+        startPosition: resume?.time ?? -1,
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
         backBufferLength: 30,
@@ -225,8 +229,8 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (activity.isActive()) hls.startLoad();
-        if (autoPlay) activity.play("manifest_autoplay", true);
+        if (activity.isActive()) hls.startLoad(resume?.time ?? -1);
+        if (autoPlay && !resume) activity.play("manifest_autoplay", true);
       });
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
         recoverCountRef.current = 0;
@@ -291,7 +295,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       if (useHls) detachCache = attachPlaybackCache(null, video, activity.isActive, (ranges) => onCacheRanges?.(ranges), url, () => subtitlesRef.current);
       else detachCache = attachDirectCache(url, video, activity.isActive, (ranges) => onCacheRanges?.(ranges));
       video.src = url;
-      if (autoPlay) activity.play("native_autoplay", true);
+      if (autoPlay && !resume) activity.play("native_autoplay", true);
     }
 
     return () => {
@@ -305,7 +309,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src]);
+  }, [src, proxyRecovery.revision]);
 
   useEffect(() => { videoRef.current?.dispatchEvent(new Event("subtitle-preference")); }, [subtitlesEnabled]);
   useEffect(() => { if (videoRef.current) videoRef.current.muted = muted; }, [muted]);

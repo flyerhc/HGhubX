@@ -7,7 +7,7 @@ import { api } from "../src/api";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 api.boot = async () => ({ user: null, logged_in: false, base: "https://fixture.invalid" });
-const LS = "hghub_app_v1";
+const LS = "hghubx_app_v1";
 const originalGet = Storage.prototype.getItem;
 const originalSet = Storage.prototype.setItem;
 let store: ReturnType<typeof useStore>;

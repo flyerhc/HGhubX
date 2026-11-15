@@ -26,6 +26,7 @@ XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: string, 
 };
 
 const fixture = {
+  rejectPlaybackApi: new URLSearchParams(location.search).has("api-failure"),
   seeks: [] as number[], errors: [] as string[],
   setActive: (_active: boolean) => {},
   nextSource: () => {},
@@ -149,6 +150,7 @@ if (backend) {
 api.boot = async () => ({ user: null, logged_in: false, base: "https://fixture.invalid", strict_security: true });
 api.play = async (id, ep = 1) => {
   fixture.playRequests.push({ id, ep });
+  if (fixture.rejectPlaybackApi) throw new Error("fixture playback API unavailable");
   if (fixture.failEpisode === ep) throw new Error("Fixture episode unavailable");
   return { id, ep_num: ep, title: "Seek fixture", duration: 90,
     video_url_hevc: new URLSearchParams(location.search).has("hevc") ? `${mediaSource()}?video=${id}&episode=${ep}&quality=hevc` : undefined,

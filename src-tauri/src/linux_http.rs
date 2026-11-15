@@ -82,18 +82,43 @@ fn serve(mut stream: TcpStream) -> std::io::Result<()> {
     let response = tauri::async_runtime::block_on(crate::media::handle(
         request.uri().path(), request.uri().query().unwrap_or(""), ORIGIN, range));
     let (parts, body) = response.into_parts();
-    let mut headers = format!("HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        parts.status.as_u16(), parts.status.canonical_reason().unwrap_or("OK"), body.len());
-    for (name, value) in &parts.headers {
-        if name == "content-length" || name == "connection" || name == "access-control-allow-origin" { continue; }
-        if let Ok(value) = value.to_str() { headers.push_str(&format!("{name}: {value}\r\n")); }
+    write_response(&mut stream, request.headers().get("origin").and_then(|h| h.to_str().ok()), request.method().as_str(), parts, &body)
+}
+
+fn write_response(
+    stream: &mut impl Write,
+    origin: Option<&str>,
+    method: &str,
+    parts: tauri::http::response::Parts,
+    body: &[u8],
+) -> std::io::Result<()> {
+    let mut head = String::with_capacity(320);
+    head.push_str(&format!(
+        "HTTP/1.1 {} {}\r\n",
+        parts.status.as_u16(),
+        parts.status.canonical_reason().unwrap_or("OK")
+    ));
+    head.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    for (name, value) in parts.headers.iter() {
+        // This server sends a complete body and closes the connection. Do not
+        // duplicate media::handle's length/CORS headers or forward framing for
+        // an upstream connection (WebKit rejects ambiguous HTTP framing).
+        if matches!(
+            name.as_str(),
+            "content-length" | "transfer-encoding" | "connection" | "access-control-allow-origin"
+        ) {
+            continue;
+        }
+        if let Ok(value) = value.to_str() {
+            head.push_str(&format!("{}: {}\r\n", name.as_str(), value));
+        }
     }
-    if let Some(origin) = request.headers().get("origin").and_then(|h| h.to_str().ok()) {
-        headers.push_str(&format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n"));
+    if let Some(origin) = origin { head.push_str(&format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n")); }
+    head.push_str("Connection: close\r\n\r\n");
+    stream.write_all(head.as_bytes())?;
+    if method != "HEAD" {
+        stream.write_all(body)?;
     }
-    headers.push_str("\r\n");
-    stream.write_all(headers.as_bytes())?;
-    if request.method() != "HEAD" { stream.write_all(&body)?; }
     stream.flush()
 }
 
@@ -105,6 +130,7 @@ fn write_plain(stream: &mut TcpStream, status: u16) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::http::Response;
     #[test]
     fn native_ranges_and_app_origins_are_preserved() {
         let request = parse_request(b"GET /seg?u=x&direct=1 HTTP/1.1\r\nHost: 127.0.0.1:17650\r\nRange: bytes=100-199\r\n\r\n").unwrap();
@@ -175,5 +201,47 @@ mod tests {
         crate::network_policy::set_strict_security(true).unwrap();
         crate::media_cache::clear().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn get_has_one_authoritative_length_and_cors_header() {
+        let (parts, body) = Response::builder()
+            .header("Content-Length", "999")
+            .header("Transfer-Encoding", "chunked")
+            .header("Connection", "keep-alive")
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Content-Type", "application/vnd.apple.mpegurl")
+            .body(b"#EXTM3U\n".to_vec())
+            .unwrap()
+            .into_parts();
+        let mut wire = Vec::new();
+        write_response(&mut wire, Some("tauri://localhost"), "GET", parts, &body).unwrap();
+        let wire = String::from_utf8(wire).unwrap();
+        let (head, data) = wire.split_once("\r\n\r\n").unwrap();
+        let headers = head.to_ascii_lowercase();
+        assert_eq!(headers.matches("content-length:").count(), 1);
+        assert!(headers.contains("content-length: 8\r\n"));
+        assert_eq!(headers.matches("access-control-allow-origin:").count(), 1);
+        assert_eq!(headers.matches("connection:").count(), 1);
+        assert!(headers.ends_with("connection: close"));
+        assert!(!headers.contains("transfer-encoding:"));
+        assert!(headers.contains("content-type: application/vnd.apple.mpegurl"));
+        assert_eq!(data, "#EXTM3U\n");
+    }
+
+    #[test]
+    fn head_keeps_representation_length_without_sending_body() {
+        let (parts, body) = Response::builder()
+            .status(206)
+            .header("Content-Range", "bytes 0-3/20")
+            .body(b"data".to_vec())
+            .unwrap()
+            .into_parts();
+        let mut wire = Vec::new();
+        write_response(&mut wire, None, "HEAD", parts, &body).unwrap();
+        let wire = String::from_utf8(wire).unwrap();
+        assert!(wire.starts_with("HTTP/1.1 206 Partial Content\r\n"));
+        assert!(wire.contains("Content-Length: 4\r\n"));
+        assert!(wire.contains("content-range: bytes 0-3/20\r\n"));
+        assert!(wire.ends_with("\r\n\r\n"));
     }
 }

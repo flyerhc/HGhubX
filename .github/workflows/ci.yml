@@ -58,6 +58,11 @@ jobs:
       - name: Mobile layout
         run: pnpm test:mobile-layout
 
+      - name: iOS material UI and overlay interactions
+        run: |
+          pnpm test:ios-ui
+          pnpm test:ios-overlays
+
       - name: Diagnostic copy
         run: pnpm test:diagnostic-copy
 
@@ -68,6 +73,9 @@ jobs:
 
       - name: Progress, subtitles and quality regression
         run: pnpm test:playback-local --scenarios subtitles,subtitles-legacy,subtitles-hls,progress,quality,replay,interrupted,autonext,storage
+
+      - name: Storage migration
+        run: pnpm test:storage-migration
 
       - name: Playback diagnostics
         run: pnpm test:playback

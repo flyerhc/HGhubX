@@ -123,7 +123,7 @@ async function subtitleChecks(page, legacy) {
   const toggle = async () => { await page.mouse.move(650, 450); await button.click(); };
   await addTrack(); await mode("showing");
   await toggle(); await mode("hidden");
-  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("hghub_app_v1"))).subtitlesEnabled, false);
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("hghubx_app_v1"))).subtitlesEnabled, false);
   await page.evaluate(() => window.playerSeekFixture.nextSource());
   await page.waitForFunction(() => document.querySelector("video")?.currentTime > 1);
   assert.equal(await button.getAttribute("aria-pressed"), "false");
@@ -181,8 +181,8 @@ async function seekChecks(page, legacy) {
   await clickProgress(page, .1);
   assert.equal((await getLogs(page)).length, 0, "Default-off must not record seeks");
   await page.getByRole("button", { name: "诊断设置", exact: true }).click();
-  await page.getByRole("button", { name: "播放诊断日志", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="播放诊断日志"]').getAttribute("aria-pressed") === "true");
+  await page.getByRole("switch", { name: "播放诊断日志", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="播放诊断日志"]').getAttribute("aria-checked") === "true");
   await page.getByRole("button", { name: "诊断设置", exact: true }).click();
   const clickGap = await page.evaluate(() => window.playerSeekFixture.primeCache(.8));
   await clickProgress(page, .8);
@@ -348,6 +348,7 @@ async function lifecyclePlayerCheck(page, legacy) {
     assert(!logs.some(e => e.event === "hlsFragLoading"), "Hidden manifest must not start fragment loading");
     await page.evaluate(() => window.playerSeekFixture.setActive(true));
     await page.waitForFunction(() => document.querySelector("video").currentTime > 1 && !document.querySelector("video").paused);
+    await page.mouse.move(450, 480); // Wake controls after the intentionally delayed manifest.
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await page.evaluate(() => window.playerSeekFixture.setActive(false));
     await page.waitForFunction(() => !window.playerSeekFixture.engineState().loading);
@@ -382,7 +383,7 @@ async function loadResumeFixture(page, extra = '') {
     if (sessionStorage.getItem('progress-fixture-seeded')) return;
     sessionStorage.setItem('progress-fixture-seeded', '1');
     // The old format has no independent progress map.
-    localStorage.setItem('hghub_app_v1', JSON.stringify({ favs: [991], history: [
+    localStorage.setItem('hghubx_app_v1', JSON.stringify({ favs: [991], history: [
       { id: 991, ep: 3, t: 35, dur: 90, at: Date.now() },
       { id: 992, ep: 4, t: 22, dur: 90, at: Date.now() - 1 },
     ] }));
@@ -418,14 +419,14 @@ async function progressChecks(page) {
   const initial = await page.evaluate(() => window.playerSeekFixture.getProgress(991).t);
   await page.waitForFunction(time => window.playerSeekFixture.getProgress(991).t >= time + 4, initial);
   await page.evaluate(() => window.playerSeekFixture.setActive(false));
-  const hidden = await page.evaluate(() => JSON.parse(localStorage.getItem('hghub_app_v1')).progress[991]);
+  const hidden = await page.evaluate(() => JSON.parse(localStorage.getItem('hghubx_app_v1')).progress[991]);
   assert.equal(hidden.ep, 3);
   assert(hidden.t >= 35);
   const resumeTime = Math.floor(hidden.t);
   await backFromPlayer(page);
   const retained = await page.evaluate(() => {
     for (let i = 1000; i < 1081; i++) window.playerSeekFixture.record(i, 6, 17, 90);
-    const saved = JSON.parse(localStorage.getItem('hghub_app_v1'));
+    const saved = JSON.parse(localStorage.getItem('hghubx_app_v1'));
     return { count: saved.history.length, recent: saved.history.some(entry => entry.id === 991), old: saved.progress[991] };
   });
   assert.equal(retained.count, 80);
@@ -444,7 +445,7 @@ async function progressChecks(page) {
     fixture.clearHistory();
     fixture.record(991, 7, 12, 90, writer);
     window.dispatchEvent(new Event('pagehide'));
-    const saved = JSON.parse(localStorage.getItem('hghub_app_v1'));
+    const saved = JSON.parse(localStorage.getItem('hghubx_app_v1'));
     return { history: saved.history, progress: saved.progress };
   });
   assert.deepEqual(cleared, { history: [], progress: {} });

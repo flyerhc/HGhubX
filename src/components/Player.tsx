@@ -1,3 +1,5 @@
+import { Button, Input } from "./ios/controls";
+import { Loader } from "./ios/effects";
 import React, { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import { attachPlaybackCache, attachDirectCache, type CacheRange } from "../playbackCache";
@@ -7,6 +9,7 @@ import { fmtTime, platform, mediaUrl } from "../api";
 import { mediaErrorMessage } from "../mediaErrors";
 import { mediaHost, mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
+import { useProxyPlaybackRecovery } from "../useProxyPlaybackRecovery";
 import { useSeekInput } from "../useSeekInput";
 import PlaybackLock from "./PlaybackLock";
 import { ISubtitles, ICompress, IExpand, ILockF, IPauseF, IPlayF, IVol, IVolMute } from "../icons";
@@ -39,6 +42,7 @@ export default function Player({
   const recoverCountRef = useRef(0);
   const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { view: "post_detail", ...diagnosticContext, active, resource: mediaResource(src) });
   const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay: !!autoPlay, src, trace });
+  const proxyRecovery = useProxyPlaybackRecovery(videoRef, src, activity, trace);
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [time, setTime] = useState(0);
@@ -71,6 +75,7 @@ export default function Player({
     setCacheRanges([]);
     setWaiting(false);
     recoverCountRef.current = 0;
+    const resume = proxyRecovery.resume();
     const url = mediaUrl(src);
     const useHls = !url.includes("/seg?u=");
     let detachCache: (() => void) | undefined;
@@ -90,6 +95,7 @@ export default function Player({
         // Keep the same macOS seek workaround as the shared player.
         preferManagedMediaSource: false,
         autoStartLoad: false,
+        startPosition: resume?.time ?? -1,
         lowLatencyMode: false,
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
@@ -110,8 +116,8 @@ export default function Player({
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (activity.isActive()) hls.startLoad();
-        if (autoPlay) activity.play("manifest_autoplay", true);
+        if (activity.isActive()) hls.startLoad(resume?.time ?? -1);
+        if (autoPlay && !resume) activity.play("manifest_autoplay", true);
       });
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
         recoverCountRef.current = 0;
@@ -151,7 +157,7 @@ export default function Player({
       detachSubtitles = attachSubtitles(video, null, () => subtitlesRef.current);
       detachCache = useHls ? attachPlaybackCache(null, video, activity.isActive, setCacheRanges, url, () => subtitlesRef.current) : attachDirectCache(url, video, activity.isActive, setCacheRanges);
       video.src = url;
-      if (autoPlay) activity.play("native_autoplay", true);
+      if (autoPlay && !resume) activity.play("native_autoplay", true);
     }
 
     return () => {
@@ -160,7 +166,7 @@ export default function Player({
       detachSubtitles?.();
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
-  }, [src, autoPlay]);
+  }, [src, autoPlay, proxyRecovery.revision]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -237,53 +243,53 @@ export default function Player({
       />
 
       {errMsg && (
-        <div className="absolute left-2 top-2 z-30 max-w-[80%] rounded bg-black/70 px-2 py-1 text-[10px] leading-tight text-red-300 break-all">
+        <div className="absolute left-2 top-2 z-30 max-w-[80%] rounded bg-black/70 px-2 py-1 text-[12px] leading-tight text-red-300 break-all">
           {errMsg}
         </div>
       )}
 
       {waiting && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="w-9 h-9 spinner" />
+          <Loader className="w-9 h-9 spinner" />
         </div>
       )}
 
       {!playing && !waiting && (
-        <button onClick={toggle} aria-label="播放"
+        <Button onClick={toggle} aria-label="播放"
           className="absolute inset-0 flex items-center justify-center">
           <span className="w-16 h-16 rounded-full bg-black/45 backdrop-blur-sm flex items-center justify-center elev-2 pressable">
             <IPlayF size={26} className="text-white ml-0.5" />
           </span>
-        </button>
+        </Button>
       )}
 
       {controls && (
-        <div className="absolute inset-x-0 bottom-0 px-3 pb-2 pt-8 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="player-inline-controls absolute inset-x-0 bottom-0 px-3 pb-2 pt-8 opacity-0 group-hover:opacity-100 transition-opacity">
           <div className="relative">
             <div className="absolute inset-x-0 top-1/2 h-[3px] pointer-events-none">
               {cacheRanges.map((r, i) => <span key={i} className="absolute h-full bg-primary/40" style={{ left: `${duration ? r.start / duration * 100 : 0}%`, width: `${duration ? (r.end - r.start) / duration * 100 : 0}%` }} />)}
             </div>
-          <input aria-label="播放进度" type="range" {...seek.inputProps}
+          <Input aria-label="播放进度" type="range" {...seek.inputProps}
             className="hg-range w-full" style={{ ...seek.inputProps.style, "--fill": `${pct}%` } as React.CSSProperties} />
           </div>
           <div className="flex items-center gap-3 mt-1 text-white">
-            <button onClick={toggle} aria-label={playing ? "暂停" : "播放"} className="pressable">
+            <Button onClick={toggle} aria-label={playing ? "暂停" : "播放"} className="pressable">
               {playing ? <IPauseF size={16} /> : <IPlayF size={16} />}
-            </button>
-            <button onClick={() => onToggleMute?.()} aria-label={muted ? "取消静音" : "静音"} className="pressable">
+            </Button>
+            <Button onClick={() => onToggleMute?.()} aria-label={muted ? "取消静音" : "静音"} className="pressable">
               {muted ? <IVolMute size={16} /> : <IVol size={16} />}
-            </button>
-            <span className="text-[11px] tabular-nums text-white/85">{fmtTime(seek.time)} / {fmtTime(duration)}</span>
+            </Button>
+            <span className="text-[12px] tabular-nums text-white/85">{fmtTime(seek.time)} / {fmtTime(duration)}</span>
             <div className="flex-1" />
-            <button aria-label="字幕" aria-pressed={subtitlesEnabled} title={subtitlesEnabled ? "关闭字幕" : "显示字幕"}
-              onClick={() => setSubtitlesEnabled(!subtitlesEnabled)} className="pressable"><ISubtitles size={20} /></button>
-            <button onClick={() => setControlsLocked(true)} aria-label="锁定播放控制" title="锁定播放控制" aria-pressed={false} className="pressable">
+            <Button aria-label="字幕" aria-pressed={subtitlesEnabled} title={subtitlesEnabled ? "关闭字幕" : "显示字幕"}
+              onClick={() => setSubtitlesEnabled(!subtitlesEnabled)} className="pressable"><ISubtitles size={20} /></Button>
+            <Button onClick={() => setControlsLocked(true)} aria-label="锁定播放控制" title="锁定播放控制" aria-pressed={false} className="pressable">
               <ILockF size={16} />
-            </button>
-            <button onClick={cycleRate} className="text-[11px] font-bold text-white/85 pressable tabular-nums">{rate}x</button>
-            <button onClick={toggleFull} aria-label="全屏" className="pressable">
+            </Button>
+            <Button onClick={cycleRate} className="text-[12px] font-bold text-white/85 pressable tabular-nums">{rate}x</Button>
+            <Button onClick={toggleFull} aria-label="全屏" className="pressable">
               {full ? <ICompress size={16} /> : <IExpand size={16} />}
-            </button>
+            </Button>
           </div>
         </div>
       )}
