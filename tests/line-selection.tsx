@@ -3,10 +3,11 @@ import { createRoot } from "react-dom/client";
 import { AppProvider, useStore } from "../src/store";
 import Settings from "../src/pages/Settings";
 import { ToastHost } from "../src/components/ui";
-import { autoLineEnabled, initAutoLine, pickLine } from "../src/autoLine";
+import { autoLineEnabled, initAutoLine, pickLine, setAutoLine } from "../src/autoLine";
+import { api } from "../src/api";
 import "../src/index.css";
 
-Object.assign(window, { lineSelectionControls: { autoLineEnabled, initAutoLine, pickLine } });
+Object.assign(window, { lineSelectionControls: { autoLineEnabled, initAutoLine, pickLine, setAutoLine, api } });
 initAutoLine();
 
 function Probe() {

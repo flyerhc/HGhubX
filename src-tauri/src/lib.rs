@@ -23,6 +23,7 @@ mod playback_log;
 mod proxy;
 mod search_hot;
 mod session;
+mod source_cache;
 
 use api::Api;
 use tauri::Manager;
@@ -107,6 +108,7 @@ pub fn run() {
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 // 上次选择的线路（设置 → 线路）在启动时恢复
+                lines::bind(&dir);
                 net::bind_base(&dir);
                 playback_log::bind(&dir);
                 let state: tauri::State<Api> = app.state();

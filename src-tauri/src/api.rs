@@ -117,11 +117,28 @@ pub async fn net_diag() -> Result<Value, String> {
 // Network probes run without holding this lock. Manual selection/cancellation
 // invalidates older probes; applying a result is serialized with manual writes.
 static LINE_SELECTION: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+static LINE_CHANGES: once_cell::sync::Lazy<tokio::sync::watch::Sender<u64>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::watch::channel(0).0);
 
-fn begin_line_selection() -> Result<u64, String> {
-    let mut generation = LINE_SELECTION.lock().map_err(|_| "线路选择锁失败")?;
+fn invalidate_line_selection(generation: &mut u64) {
     *generation = generation.wrapping_add(1);
-    Ok(*generation)
+    LINE_CHANGES.send_replace(*generation);
+}
+
+fn begin_line_selection() -> Result<(u64, tokio::sync::watch::Receiver<u64>), String> {
+    let mut generation = LINE_SELECTION.lock().map_err(|_| "线路选择锁失败")?;
+    invalidate_line_selection(&mut generation);
+    Ok((*generation, LINE_CHANGES.subscribe()))
+}
+
+async fn until_line_change<F: std::future::Future>(
+    mut changes: tokio::sync::watch::Receiver<u64>, task: F,
+) -> Option<F::Output> {
+    tokio::select! {
+        biased;
+        _ = changes.changed() => None,
+        result = task => Some(result),
+    }
 }
 
 #[tauri::command]
@@ -140,15 +157,15 @@ pub async fn line_state() -> Result<Value, String> {
     }))
 }
 
-/// 手动切换线路：只允许固定线路或刚从可信发布页读取的镜像。
+/// 手动切换线路：只允许主站或有效发布缓存中的镜像；凭据信任单独校验。
 #[tauri::command]
 pub async fn line_set(state: State<'_, Api>, url: String) -> Result<String, String> {
     let mut generation = LINE_SELECTION.lock().map_err(|_| "线路选择锁失败")?;
-    *generation = generation.wrapping_add(1);
+    invalidate_line_selection(&mut generation);
     let previous = base();
     let applied = crate::net::set_base(&url)?;
-    crate::net::refresh_client();
     if previous != applied {
+        crate::net::refresh_client();
         state.session.clear();
     }
     Ok(applied)
@@ -157,11 +174,13 @@ pub async fn line_set(state: State<'_, Api>, url: String) -> Result<String, Stri
 #[tauri::command]
 pub async fn line_custom_set(state: State<'_, Api>, url: String) -> Result<Value, String> {
     let mut generation = LINE_SELECTION.lock().map_err(|_| "线路选择锁失败")?;
-    *generation = generation.wrapping_add(1);
+    invalidate_line_selection(&mut generation);
     let previous = base();
     let applied = crate::net::set_custom_base(&url)?;
-    crate::net::refresh_client();
-    if previous != applied { state.session.clear(); }
+    if previous != applied {
+        crate::net::refresh_client();
+        state.session.clear();
+    }
     Ok(json!({ "base": applied, "custom": crate::net::is_custom_line() }))
 }
 
@@ -182,7 +201,7 @@ pub async fn proxy_set(mode: String, url: String) -> Result<Value, String> {
     // never switch the line after the new proxy has been saved.
     let mut generation = LINE_SELECTION.lock().map_err(|_| "线路选择锁失败")?;
     crate::proxy::set(&mode, &url)?;
-    *generation = generation.wrapping_add(1);
+    invalidate_line_selection(&mut generation);
     crate::net::refresh_client();
     let state = crate::net::proxy_state();
     crate::playback_log::record("proxy.changed", json!({
@@ -207,18 +226,20 @@ pub async fn line_mirrors() -> Result<Value, String> {
 /// 可达性探测：只报结果，不做自动检查 / 自动切换。
 #[tauri::command]
 pub async fn line_probe(urls: Vec<String>) -> Result<Value, String> {
-    crate::net::refresh_client();
     Ok(crate::lines::probe(urls).await)
 }
 
-/// 自动选线：探测主站与可信发布页镜像，全部失败时保持当前线路。
+/// 自动选线：优先保持健康的当前线路，故障后探测主站与发布镜像。
 ///
 /// 保留按 origin 隔离的会话，不会把旧站点 token 发送给新站点。
 #[tauri::command]
 pub async fn line_auto() -> Result<Value, String> {
-    let selection = begin_line_selection()?;
-    crate::net::refresh_client();
-    let pick = crate::lines::auto_pick().await;
+    let (selection, changes) = begin_line_selection()?;
+    let Some(pick) = until_line_change(changes, crate::lines::auto_pick()).await else {
+        let current = base();
+        return Ok(json!({ "previous": current, "base": current, "switched": false, "cancelled": true,
+            "pick": { "base": "", "tier": "none", "ms": 0, "reason": "cancelled", "candidates": [] } }));
+    };
     let chosen = pick
         .get("base")
         .and_then(Value::as_str)
@@ -243,32 +264,17 @@ pub async fn line_auto() -> Result<Value, String> {
     }))
 }
 
-/// 当前走的是镜像时，敲一次主站：通了就切回（不清会话）。
-///
-/// 和 [`line_auto`] 的分工：[`line_auto`] 是「整体比一次」，要抓发布页；
-/// 这个只问一句「主站现在通不通」，代价一个请求，可以频繁调用。
+/// 兼容旧 IPC 的主站探测；不再抢占健康的当前线路。
 #[tauri::command]
 pub async fn line_try_main() -> Result<Value, String> {
-    let selection = begin_line_selection()?;
-    crate::net::refresh_client();
     let probe = crate::lines::try_main().await;
-    let mut switched = false;
-    let generation = LINE_SELECTION.lock().map_err(|_| "线路选择锁失败")?;
-    let previous = base();
-    if *generation == selection && probe.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-        let chosen = probe.get("base").and_then(Value::as_str).unwrap_or_default();
-        if !chosen.is_empty() && chosen != previous {
-            let next = crate::net::set_base(chosen)?;
-            crate::net::refresh_client();
-            switched = next != previous;
-        }
-    }
+    let current = base();
     Ok(json!({
-        "previous": previous,
-        "base": crate::net::base(),
-        "switched": switched,
+        "previous": current,
+        "base": current,
+        "switched": false,
         "probe": probe,
-        "cancelled": *generation != selection,
+        "cancelled": false,
     }))
 }
 
@@ -329,7 +335,8 @@ fn version_in(text: &str) -> String {
 /// 线路体检：探一次 `/api/videos`，和自动选线用同一个判据。
 #[tauri::command]
 pub async fn line_health() -> Result<Value, String> {
-    Ok(crate::lines::health().await)
+    until_line_change(LINE_CHANGES.subscribe(), crate::lines::health()).await
+        .ok_or_else(|| "线路探测已取消".into())
 }
 /// 对比 GitHub Release 的 tag 与当前版本（未认证 60 次/小时/IP，够用）。
 #[tauri::command]
@@ -1157,8 +1164,36 @@ pub async fn api_user_videos(
 }
 #[cfg(test)]
 mod tests {
-    use super::{is_newer, normalize_account, normalize_account_history, version_in};
+    use super::{is_newer, normalize_account, normalize_account_history, version_in, until_line_change};
     use serde_json::{json, Value};
+
+    #[tokio::test]
+    async fn source_change_drops_running_probes_and_cancels_before_polling_stale_work() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        struct Guard(Arc<AtomicBool>);
+        impl Drop for Guard {
+            fn drop(&mut self) { self.0.store(true, Ordering::SeqCst); }
+        }
+        let (changes, receiver) = tokio::sync::watch::channel(0_u64);
+        let (started, running) = tokio::sync::oneshot::channel();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = Guard(dropped.clone());
+        let probe = async move {
+            let _guard = guard;
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        };
+        let (result, _) = tokio::join!(until_line_change(receiver, probe), async {
+            running.await.unwrap();
+            changes.send_replace(1);
+        });
+        assert!(result.is_none());
+        assert!(dropped.load(Ordering::SeqCst));
+
+        let receiver = changes.subscribe();
+        changes.send_replace(2);
+        assert!(until_line_change(receiver, async { panic!("stale work must not start") }).await.is_none());
+    }
 
     #[test]
     fn account_snapshot_accepts_direct_and_wrapped_profiles_without_credentials() {

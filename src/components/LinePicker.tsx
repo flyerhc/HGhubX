@@ -1,7 +1,7 @@
 import { Button, Input, Surface } from "./ios/controls";
 import { Loader } from "./ios/effects";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { api, hostOf, isMobile, type LineApply, type LineItem, type LineProbe, type LineState } from "../api";
+import { api, hostOf, isMobile, type LineApply, type LineItem, type LineMirrors, type LineProbe, type LineState } from "../api";
 import { tracePlayback } from "../playbackDiagnostics";
 import { autoLineEnabled, setAutoLine } from "../autoLine";
 import { useStore } from "../store";
@@ -51,6 +51,7 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
   const [state, setState] = useState<LineState | null>(null);
   const [mirrors, setMirrors] = useState<LineItem[] | null>(null);
   const [mirrorErr, setMirrorErr] = useState("");
+  const [mirrorInfo, setMirrorInfo] = useState<LineMirrors | null>(null);
   const [loadingMirrors, setLoadingMirrors] = useState(false);
   const [probes, setProbes] = useState<ProbeMap>({});
   const [probing, setProbing] = useState("");
@@ -85,8 +86,9 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
     try {
       const res = await api.lineMirrors();
       setMirrors(res?.items || []);
+      setMirrorInfo(res);
+      if (res.stale) setMirrorErr("发布页暂未更新，继续显示上次获取的镜像");
     } catch (e) {
-      setMirrors([]);
       setMirrorErr((e as Error).message || "镜像线路获取失败");
     } finally {
       setLoadingMirrors(false);
@@ -139,14 +141,15 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
       await setAutoLine(false);
       const next = await apply();
       tracePlayback("line.manual", { line: hostOf(next.base), prev: hostOf(state?.base ?? ""), custom: next.custom, ok: true });
-      if (next.base !== state?.base) setUser(null);
+      const changed = next.base !== state?.base;
+      if (changed) setUser(null);
       setState((s) => (s ? { ...s, ...next } : s));
       if (key === "custom" || key === "reset") setCustom(next.custom ? next.base : "");
-      toast(`线路已切换到 ${hostOf(next.base)}，已使用手动选线，跨站点需重新登录`, "ok");
+      toast(changed ? `线路已切换到 ${hostOf(next.base)}，已使用手动选线，跨站点需重新登录` : "已保留当前源并使用手动选线", "ok");
       // 走的是新域名了，列表页得重新拉一遍，否则还是旧线路的内容
-      window.dispatchEvent(new Event("hg:line-changed"));
+      if (changed) window.dispatchEvent(new Event("hg:line-changed"));
     } catch (e) {
-      if (wasAuto) void setAutoLine(true);
+      if (wasAuto) void setAutoLine(true, { select: false });
       const error = (e as Error).message || "切换失败";
       tracePlayback("line.manual", { ok: false, err: error });
       if (key === "custom" || key === "reset") setCustomError(error);
@@ -173,7 +176,7 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
     void applyLine("custom", () => api.lineCustomSet(raw));
   };
 
-  const fixed = state?.fixed || [];
+  const fixed = (state?.fixed || []).map(item => ({ ...item, name: "主站" }));
   const mirrorItems = [...(mirrors || [])].sort((a, b) => Number(b.url === state?.base) - Number(a.url === state?.base));
   const busyAll = !!probing || !!switching || !ready;
   const close = () => { if (!applying.current) onClose(); };
@@ -211,14 +214,8 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
           </form>
         </Surface>
         <GroupHead
-          title="固定线路"
-          hint="需代理 / 非大陆网络"
-          actions={
-            <Button onClick={() => probe(fixed, "fixed")} disabled={busyAll || !fixed.length}
-              className="text-[12px] text-primary pressable disabled:opacity-50">
-              {probing === "fixed" ? "检测中…" : "全部检测"}
-            </Button>
-          }
+          title="主站"
+          hint="固定内容源；可用时保持当前选择"
         />
         <Surface className="rounded-(--r-md) bg-s2 divide-y divide-s3 overflow-hidden">
           {fixed.map((it) => (
@@ -246,26 +243,30 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
             </>
           }
         />
+        {mirrorInfo && <div className="px-1 mb-2 text-[12px] text-mut break-all" role="status">
+          来源：{mirrorInfo.source}（地址发布页）
+          {(mirrorInfo.cached || mirrorInfo.stale) && <span> · {mirrorInfo.stale ? "上次保存的列表" : "已缓存"}</span>}
+          {!!mirrorInfo.errors?.length && <div>部分发布页暂不可用，已保留可用结果</div>}
+        </div>}
         <Surface className="rounded-(--r-md) bg-s2 divide-y divide-s3 overflow-hidden">
           {loadingMirrors && <div className="flex justify-center py-6"><Loader className="w-6 h-6 spinner" /></div>}
           {!loadingMirrors && mirrorErr && (
             <div className="px-3.5 py-3">
-              <div className="text-[12px] text-danger">镜像线路获取失败</div>
+              <div className="text-[12px] text-danger">{mirrors?.length ? "镜像更新失败，已保留上次列表" : "镜像线路获取失败"}</div>
               <div className="text-[12px] text-mut mt-1 break-all">{mirrorErr}</div>
             </div>
           )}
           {!loadingMirrors && !mirrorErr && mirrors?.length === 0 && (
             <div className="px-3.5 py-3 text-[12px] text-mut">地址发布页里没有可用的镜像地址</div>
           )}
-          {!loadingMirrors && mirrorItems.map((it) => (
+          {mirrorItems.map((it) => (
             <Row key={it.url} item={it} current={state?.base === it.url} probe={probes[it.url]}
               busy={probing === it.url} disabled={busyAll} onPick={pick} onProbe={(u) => probe([{ url: u }], u)} />
           ))}
         </Surface>
 
         <div className="text-[12px] text-dim leading-relaxed px-1 mt-4">
-          切换后立即生效，请求链路与数据模型不变。这里的「检测」只探这一次；
-          日常的自动选线在 设置 → 网络 → 自动选择线路。
+          检测仅检查内容接口，不会切换。自动选线保持可用的当前源，确认失效后才寻找替代源；手动选择后暂停自动选线。
         </div>
       </div>
     </div>

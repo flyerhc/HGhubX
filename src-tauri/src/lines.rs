@@ -3,145 +3,174 @@
 
 use dom_query::Document;
 use serde_json::{json, Value};
-use std::collections::HashSet;
-use std::sync::RwLock;
+use crate::source_cache::{self, Mirror, Snapshot};
+use std::collections::{HashSet, VecDeque};
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-pub const FIXED: [(&str, &str); 2] = [
-    ("固定线路 1", "https://huangguoai.com"),
-    ("固定线路 2", "https://huangguoai.ai"),
-];
+pub const FIXED: [(&str, &str); 1] = [("主站", "https://huangguoai.com")];
 const PUBLISH_PAGES: [&str; 2] = [
-    "https://huangguoai.pages.dev/",
     "https://huang-guo.pages.dev/",
+    "https://huangguoai.pages.dev/",
 ];
 const MIRROR_MAX: usize = 60;
 const PUBLISH_ARRAY_MAX: usize = 256;
 const RECOMMENDED_MAX: usize = 20;
 const PAGE_TIMEOUT: Duration = Duration::from_secs(8);
+const PUBLISH_HEDGE: Duration = Duration::from_millis(500);
 const MAX_PUBLISH_BYTES: usize = 512 * 1024;
 const AUTO_PROBE_PATH: &str = "/api/videos?page=1&size=1";
 const AUTO_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const AUTO_MIRROR_MAX: usize = 10;
+const AUTO_MIRROR_MAX: usize = 12;
+const PROBE_CONCURRENCY: usize = 4;
+const PER_ROOT_MAX: usize = 3;
+static CANDIDATE_ROTATION: AtomicUsize = AtomicUsize::new(0);
+static PROBE_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(PROBE_CONCURRENCY);
 
-/// Only origins actually parsed from a trusted publisher can enter this set.
-/// Loading line.json, displaying the current line and probing a host never add trust.
-static TRUSTED_MIRRORS: RwLock<Vec<String>> = RwLock::new(Vec::new());
+pub fn is_publisher_or_retired(origin: &str) -> bool {
+    url::Url::parse(origin).ok().and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| {
+            let host = host.trim_end_matches('.');
+            ["huangguoai.ai", "huangguo.ai", "huangguoai.pages.dev", "huang-guo.pages.dev"]
+                .iter().any(|blocked| host == *blocked || host.ends_with(&format!(".{blocked}")))
+        })
+}
 
-fn remember_published(items: &[Value]) {
-    let mut known = TRUSTED_MIRRORS
-        .write()
-        .unwrap_or_else(|error| error.into_inner());
-    for origin in items
-        .iter()
-        .filter_map(|item| item.get("url").and_then(Value::as_str))
-    {
-        if !known.iter().any(|value| value == origin) {
-            if known.len() >= 256 {
-                known.remove(0);
-            }
-            known.push(origin.to_owned());
+pub fn bind(dir: &Path) {
+    source_cache::bind(dir, |mut snapshot| {
+        if !PUBLISH_PAGES.contains(&snapshot.source.as_str())
+            || absolute(&snapshot.source, &snapshot.script).is_err()
+            || snapshot.items.len() > MIRROR_MAX {
+            return None;
         }
-    }
+        let mut seen = HashSet::new();
+        snapshot.items.retain(|item| {
+            crate::net::normalize_base(&item.url).as_deref() == Some(item.url.as_str())
+                && !is_publisher_or_retired(&item.url) && !is_fixed(&item.url)
+                && valid_dns_name(&item.host) && valid_dns_name(&item.root)
+                && url::Url::parse(&item.url).ok().and_then(|url| url.host_str().map(str::to_owned)).as_deref() == Some(item.host.as_str())
+                && (item.host == item.root || item.host.ends_with(&format!(".{}", item.root)))
+                && seen.insert(item.url.clone())
+        });
+        (!snapshot.items.is_empty()).then_some(snapshot)
+    });
+}
+
+pub fn is_known_mirror(origin: &str) -> bool {
+    !is_publisher_or_retired(origin) && source_cache::known(origin)
 }
 
 pub fn is_trusted_mirror(origin: &str) -> bool {
-    TRUSTED_MIRRORS
-        .read()
-        .map(|known| known.iter().any(|value| value == origin))
-        .unwrap_or(false)
+    !is_publisher_or_retired(origin) && source_cache::trusted(origin)
 }
 
 pub fn fixed() -> Value {
-    json!(FIXED
-        .iter()
-        .map(|(name, url)| json!({ "name": name, "url": url }))
-        .collect::<Vec<_>>())
+    json!(FIXED.iter().map(|(name, url)| json!({ "name": name, "url": url })).collect::<Vec<_>>())
 }
 
 pub fn is_fixed(url: &str) -> bool {
     FIXED.iter().any(|(_, known)| *known == url)
 }
 
+#[derive(Clone)]
 struct PublishedPage {
     source: String,
     script: String,
     items: Vec<Value>,
 }
 
-/// Independent concurrent deadlines preserve either publisher's successful list.
-pub async fn mirrors() -> Result<Value, String> {
-    let (first, second) = tokio::join!(
-        mirrors_from_page(PUBLISH_PAGES[0]),
-        mirrors_from_page(PUBLISH_PAGES[1])
-    );
-    let result = merge_publishers([first, second], &crate::net::base())?;
-    if let Some(items) = result.get("items").and_then(Value::as_array) {
-        remember_published(items);
-    }
-    Ok(result)
+#[derive(Clone)]
+struct Discovery {
+    snapshot: Snapshot,
+    stale: bool,
+    error: Option<String>,
 }
 
-fn merge_publishers(
-    results: [Result<PublishedPage, String>; 2],
-    current: &str,
-) -> Result<Value, String> {
-    let mut pages = Vec::new();
-    let mut errors = Vec::new();
-    for (index, result) in results.into_iter().enumerate() {
-        match result {
-            Ok(page) => pages.push(page),
-            Err(error) => errors.push(format!("{}: {error}", PUBLISH_PAGES[index])),
+impl Discovery {
+    fn json(&self) -> Value {
+        let items: Vec<_> = self.snapshot.items.iter().map(|item| json!({
+            "url": item.url, "host": item.host, "root": item.root,
+        })).collect();
+        let mut value = json!({ "source": self.snapshot.source, "script": self.snapshot.script,
+            "items": items, "recommended_source": self.snapshot.source,
+            "recommended": items.iter().take(RECOMMENDED_MAX).collect::<Vec<_>>(),
+            "updated_at": self.snapshot.fetched_at.saturating_mul(1000), "stale": self.stale,
+            "errors": self.error.iter().collect::<Vec<_>>() });
+        if let Some(error) = &self.error { value["discovery_error"] = json!(error); }
+        value
+    }
+}
+
+fn cached_discovery(error: Option<String>) -> Option<Discovery> {
+    source_cache::cached().map(|snapshot| Discovery {
+        stale: !snapshot.fresh(source_cache::now()) || error.is_some(), snapshot, error,
+    })
+}
+
+async fn discover(force: bool, credentials: bool) -> Result<Discovery, String> {
+    if !force {
+        if let Some(error) = source_cache::recent_error() {
+            return cached_discovery(Some(error.clone())).ok_or(error);
+        }
+        if let Some(cached) = cached_discovery(None).filter(|entry| {
+            !entry.stale && (!credentials || entry.snapshot.items.iter().any(|item| is_trusted_mirror(&item.url)))
+        }) {
+            return Ok(cached);
         }
     }
-    let mut items = Vec::new();
-    let mut seen = HashSet::new();
-    // Interleave lists so a full first page cannot hide the second publisher.
-    for index in 0..MIRROR_MAX {
-        for page in &pages {
-            if let Some(item) = page.items.get(index) {
-                if let Some(origin) = item.get("url").and_then(Value::as_str) {
-                    if items.len() < MIRROR_MAX && seen.insert(origin.to_owned()) {
-                        items.push(item.clone());
-                    }
-                }
-            }
-        }
-    }
-    if items.is_empty() {
-        return Err(if errors.is_empty() {
-            "地址发布页里没有可用的镜像地址".into()
-        } else {
-            errors.join("；")
+    let loading = source_cache::refresh();
+    let result = loading.get_or_init(|| async {
+        let result = fetch_publishers().await.and_then(|page| {
+            let items: Vec<Mirror> = page.items.into_iter().filter_map(|item| serde_json::from_value(item).ok()).collect();
+            if items.is_empty() { return Err("地址发布页里没有可用的镜像地址".into()); }
+            Ok(Snapshot { source: page.source, script: page.script, items, fetched_at: source_cache::now() })
         });
-    }
-    let mut recommended = Vec::new();
-    let mut recommended_seen = HashSet::new();
-    // The restored/rotated current line is display-only unless actually published.
-    if let Some(origin) = crate::net::normalize_base(current) {
-        if let Some(host) = url::Url::parse(&origin)
-            .ok()
-            .and_then(|value| value.host_str().map(str::to_owned))
-        {
-            recommended_seen.insert(origin.clone());
-            recommended.push(json!({ "url": origin, "host": host }));
+        match &result {
+            Ok(snapshot) => source_cache::published(snapshot.clone()),
+            Err(error) => source_cache::failed(error),
         }
+        result
+    }).await.clone();
+    match result {
+        Ok(snapshot) => Ok(Discovery { snapshot, stale: false, error: None }),
+        Err(error) => cached_discovery(Some(error.clone())).ok_or(error),
     }
-    for item in &items {
-        if recommended.len() >= RECOMMENDED_MAX {
-            break;
-        }
-        if let Some(origin) = item.get("url").and_then(Value::as_str) {
-            if recommended_seen.insert(origin.to_owned()) {
-                recommended.push(item.clone());
-            }
-        }
+}
+
+/// Explicit refresh bypasses fresh TTL, but shares an already-running refresh.
+pub async fn mirrors() -> Result<Value, String> {
+    discover(true, false).await.map(|entry| entry.json())
+}
+
+/// Start the preferred publisher now, then hedge after 500 ms. A usable result
+/// wins immediately; dropping the other future cancels its unfinished request.
+async fn first_publisher<F, G>(primary: F, secondary: G, delay: Duration) -> Result<PublishedPage, String>
+where
+    F: std::future::Future<Output = Result<PublishedPage, String>>,
+    G: std::future::Future<Output = Result<PublishedPage, String>>,
+{
+    tokio::pin!(primary);
+    match tokio::time::timeout(delay, &mut primary).await {
+        Ok(Ok(page)) => return Ok(page),
+        Ok(Err(first)) => return secondary.await.map_err(|second| format!("{first}；{second}")),
+        Err(_) => {}
     }
-    let sources: Vec<_> = pages.iter().map(|page| page.source.as_str()).collect();
-    let scripts: Vec<_> = pages.iter().map(|page| page.script.as_str()).collect();
-    Ok(
-        json!({ "source": sources.join(", "), "script": scripts.join(", "), "items": items, "recommended_source": sources.join(", "), "recommended": recommended, "errors": errors }),
-    )
+    tokio::pin!(secondary);
+    tokio::select! {
+        first = &mut primary => match first {
+            Ok(page) => Ok(page),
+            Err(first) => secondary.await.map_err(|second| format!("{first}；{second}")),
+        },
+        second = &mut secondary => match second {
+            Ok(page) => Ok(page),
+            Err(second) => primary.await.map_err(|first| format!("{first}；{second}")),
+        },
+    }
+}
+
+async fn fetch_publishers() -> Result<PublishedPage, String> {
+    first_publisher(mirrors_from_page(PUBLISH_PAGES[0]), mirrors_from_page(PUBLISH_PAGES[1]), PUBLISH_HEDGE).await
 }
 
 async fn mirrors_from_page(page: &str) -> Result<PublishedPage, String> {
@@ -167,34 +196,22 @@ fn parse_mirrors(js: &str) -> Result<Vec<Value>, String> {
     if domains.is_empty() {
         return Err("发布脚本中没有找到镜像域名".into());
     }
+    let domains: Vec<_> = domains.into_iter().map(|domain| domain.trim().trim_end_matches('/').to_ascii_lowercase())
+        .filter(|domain| valid_dns_name(domain)).collect();
+    let subs: Vec<_> = if subs.is_empty() { vec![String::new()] } else {
+        subs.into_iter().map(|sub| sub.trim().to_ascii_lowercase()).filter(|sub| valid_dns_label(sub)).collect()
+    };
     let mut items = Vec::new();
     let mut seen = HashSet::new();
-    'domains: for domain in domains {
-        let domain = domain.trim().trim_end_matches('/').to_ascii_lowercase();
-        if !valid_dns_name(&domain) {
-            continue;
-        }
-        let hosts: Vec<_> = if subs.is_empty() {
-            vec![domain]
-        } else {
-            subs.iter()
-                .filter_map(|sub| {
-                    let sub = sub.trim().to_ascii_lowercase();
-                    valid_dns_label(&sub).then(|| format!("{sub}.{domain}"))
-                })
-                .collect()
-        };
-        for host in hosts {
-            if !valid_dns_name(&host) || !seen.insert(host.clone()) {
-                continue;
-            }
-            let Some(origin) = crate::net::normalize_base(&format!("https://{host}")) else {
-                continue;
-            };
-            items.push(json!({ "url": origin, "host": host }));
-            if items.len() >= MIRROR_MAX {
-                break 'domains;
-            }
+    // Round-robin roots before taking another subdomain of the same root.
+    'hosts: for sub in subs {
+        for domain in &domains {
+            let host = if sub.is_empty() { domain.clone() } else { format!("{sub}.{domain}") };
+            if !valid_dns_name(&host) || !seen.insert(host.clone()) { continue; }
+            let Some(origin) = crate::net::normalize_base(&format!("https://{host}")) else { continue };
+            if is_publisher_or_retired(&origin) || is_fixed(&origin) { continue; }
+            items.push(json!({ "url": origin, "host": host, "root": domain }));
+            if items.len() >= MIRROR_MAX { break 'hosts; }
         }
     }
     if items.is_empty() {
@@ -305,35 +322,15 @@ pub async fn verify_published_origin(origin: &str) -> Result<(), String> {
     if is_fixed(&origin) || is_trusted_mirror(&origin) {
         return Ok(());
     }
-    // Concurrent startup requests share a refresh and briefly cache misses.
-    type Refresh = Option<(Instant, Result<(), String>)>;
-    static REFRESH: std::sync::OnceLock<tokio::sync::Mutex<Refresh>> = std::sync::OnceLock::new();
-    tokio::time::timeout(PAGE_TIMEOUT + Duration::from_secs(1), async {
-        let mut refresh = REFRESH
-            .get_or_init(|| tokio::sync::Mutex::new(None))
-            .lock()
-            .await;
-        if is_trusted_mirror(&origin) {
-            return Ok(());
-        }
-        if let Some((_, result)) = refresh
-            .as_ref()
-            .filter(|(at, _)| at.elapsed() < Duration::from_secs(30))
-        {
-            result.clone()?;
-        } else {
-            let result = mirrors().await.map(|_| ());
-            *refresh = Some((Instant::now(), result.clone()));
-            result?;
-        }
-        if is_trusted_mirror(&origin) {
-            Ok(())
-        } else {
-            Err("当前镜像未被可信地址发布页收录；请重新选择线路后登录".into())
-        }
-    })
-    .await
-    .map_err(|_| "验证镜像发布来源超时".to_owned())?
+    if is_publisher_or_retired(&origin) {
+        return Err("发布页不是业务线路，请选择主站或已发现的镜像".into());
+    }
+    let _ = discover(false, true).await?;
+    if is_trusted_mirror(&origin) {
+        Ok(())
+    } else {
+        Err("当前镜像未被本次运行的可信发布页确认；请刷新镜像后登录".into())
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -585,6 +582,15 @@ async fn probe_hit(tier: &'static str, raw: &str) -> Hit {
         return hit;
     };
     hit.url = origin.clone();
+    if is_publisher_or_retired(&origin) {
+        hit.error = Some("发布页不是业务线路".into());
+        return hit;
+    }
+    // Manual checks, current-line checks and automatic races share this cap.
+    let Ok(_slot) = PROBE_SLOTS.acquire().await else {
+        hit.error = Some("线路探测已停止".into());
+        return hit;
+    };
     let started = Instant::now();
     // edge sends the upstream's real envelope. None explicitly omits credentials.
     // This total deadline also covers edge retries and the response body.
@@ -613,98 +619,178 @@ async fn probe_hit(tier: &'static str, raw: &str) -> Hit {
     hit
 }
 
-/// Manual checks retain their JSON API and never change trust or active line.
+/// Manual checks never change trust or the active line. Normalize and dedupe
+/// before the cap; a rolling queue keeps at most four probes in flight.
 pub async fn probe(urls: Vec<String>) -> Value {
+    let mut seen = HashSet::new();
+    let mut queue: VecDeque<_> = urls.into_iter().filter_map(|url| crate::net::normalize_base(&url))
+        .filter(|url| !is_publisher_or_retired(url) && seen.insert(url.clone()))
+        .take(MIRROR_MAX).collect();
+    let mut tasks = tokio::task::JoinSet::new();
     let mut out = Vec::new();
-    for chunk in urls[..urls.len().min(MIRROR_MAX)].chunks(6) {
-        let mut handles = Vec::new();
-        for origin in chunk {
-            let origin = origin.clone();
-            handles.push(tokio::spawn(
-                async move { probe_hit("mirror", &origin).await },
-            ));
+    loop {
+        while tasks.len() < PROBE_CONCURRENCY {
+            let Some(origin) = queue.pop_front() else { break };
+            tasks.spawn(async move { probe_hit("mirror", &origin).await });
         }
-        for handle in handles {
-            if let Ok(hit) = handle.await {
-                out.push(hit.json());
-            }
-        }
+        let Some(result) = tasks.join_next().await else { break };
+        if let Ok(hit) = result { out.push(hit.json()); }
     }
     json!(out)
 }
 
-/// A display recommendation is not proof of publication. Candidates are built
-/// exclusively from the published items; the .ai landing page is never automatic.
-fn auto_candidates(items: &[Value], current: &str, trusted: impl Fn(&str) -> bool) -> Vec<String> {
-    let mut candidates = Vec::new();
+/// Probe different publisher roots before more aliases of the same root. Rotate
+/// both roots and aliases between attempts, so a 12-probe budget cannot starve
+/// entries at the end of the published pool forever.
+fn ordered_mirrors(items: &[Mirror], rotation: usize) -> Vec<(String, String)> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     let mut seen = HashSet::new();
-    let current = crate::net::normalize_base(current);
-    let published: Vec<_> = items
-        .iter()
-        .filter_map(|item| item.get("url").and_then(Value::as_str))
-        .filter_map(crate::net::normalize_base)
-        .filter(|origin| !is_fixed(origin) && trusted(origin))
-        .collect();
-    // Preserve an actually published current line as a candidate, even with a
-    // large published list. A line restored only from disk never qualifies.
-    if let Some(origin) = current.filter(|origin| published.contains(origin)) {
-        seen.insert(origin.clone());
-        candidates.push(origin);
-    }
-    for origin in published {
-        if candidates.len() >= AUTO_MIRROR_MAX {
-            break;
-        }
-        if seen.insert(origin.clone()) {
-            candidates.push(origin);
+    for item in items {
+        let Some(origin) = crate::net::normalize_base(&item.url) else { continue };
+        if is_fixed(&origin) || is_publisher_or_retired(&origin) || !seen.insert(origin.clone()) { continue; }
+        if let Some((_, origins)) = groups.iter_mut().find(|(root, _)| root == &item.root) {
+            origins.push(origin);
+        } else {
+            groups.push((item.root.clone(), vec![origin]));
         }
     }
-    candidates
+    if groups.is_empty() { return Vec::new(); }
+    let count = groups.len();
+    groups.rotate_left(rotation % count);
+    for (_, origins) in &mut groups {
+        let count = origins.len();
+        origins.rotate_left(rotation % count);
+    }
+    let mut out = Vec::new();
+    for round in 0..PER_ROOT_MAX {
+        for (root, origins) in &groups {
+            if let Some(origin) = origins.get(round) { out.push((origin.clone(), root.clone())); }
+        }
+    }
+    out
 }
 
-fn pick_from_hits(hits: &[Hit]) -> Value {
-    let winner = hits.iter().filter(|hit| hit.ok).min_by_key(|hit| hit.ms);
+fn selection_result(hits: &[Hit], kept: bool, stale: bool, error: Option<&str>) -> Value {
+    let winner = hits.iter().find(|hit| hit.ok);
     let candidates: Vec<_> = hits.iter().map(Hit::json).collect();
-    match winner {
+    let mut result = match winner {
         Some(hit) => json!({ "base": hit.url, "tier": hit.tier, "ms": hit.ms,
-            "reason": if hit.tier == "main" { "main-ok" } else { "mirror-ok" }, "candidates": candidates }),
-        None => {
-            json!({ "base": "", "tier": "none", "ms": 0, "reason": "all-down", "candidates": candidates })
-        }
-    }
+            "reason": if kept { "kept-current" } else if hit.tier == "main" { "main-ok" } else { "mirror-ok" },
+            "candidates": candidates }),
+        None => json!({ "base": "", "tier": "none", "ms": 0, "reason": "all-down", "candidates": candidates }),
+    };
+    result["stale"] = json!(stale);
+    if let Some(error) = error { result["discovery_error"] = json!(error); }
+    result
 }
 
-/// Prefer the real main API; otherwise probe trusted published mirrors in
-/// parallel. Publisher errors never discard another publisher's valid result.
-pub async fn auto_pick() -> Value {
-    let mut hits = vec![probe_hit("main", FIXED[0].1).await];
-    if hits[0].ok {
-        return pick_from_hits(&hits);
+fn next_candidate(
+    queue: &mut VecDeque<(String, String)>,
+    attempted: &mut HashSet<String>,
+    root_counts: &mut std::collections::HashMap<String, usize>,
+    remaining: &mut usize,
+) -> Option<String> {
+    while *remaining > 0 {
+        let (origin, root) = queue.pop_front()?;
+        if attempted.contains(&origin) || *root_counts.get(&root).unwrap_or(&0) >= PER_ROOT_MAX { continue; }
+        attempted.insert(origin.clone());
+        *root_counts.entry(root).or_default() += 1;
+        *remaining -= 1;
+        return Some(origin);
     }
-    let listing = mirrors().await;
-    if let Ok(listing) = &listing {
-        let items = listing
-            .get("items")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let mut handles = Vec::new();
-        for origin in auto_candidates(items, &crate::net::base(), is_trusted_mirror) {
-            handles.push(tokio::spawn(
-                async move { probe_hit("mirror", &origin).await },
-            ));
+    None
+}
+
+enum SelectionEvent {
+    Probe(Hit),
+    Discovery(Result<Discovery, String>),
+}
+
+/// Keep a healthy current origin. Only a confirmed failure starts discovery and
+/// races the main origin with mirrors; recovering .com never preempts playback.
+pub async fn auto_pick() -> Value {
+    let current = crate::net::base();
+    let mut hits = Vec::new();
+    let mut attempted = HashSet::new();
+    if !is_publisher_or_retired(&current) {
+        let tier = if is_fixed(&current) { "main" } else if crate::net::is_custom_line() { "custom" } else { "mirror" };
+        let hit = probe_hit(tier, &current).await;
+        let healthy = hit.ok;
+        attempted.insert(current.clone());
+        hits.push(hit);
+        if healthy { return selection_result(&hits, true, false, None); }
+    }
+    let rotation = CANDIDATE_ROTATION.fetch_add(1, Ordering::Relaxed);
+    let cached = source_cache::cached();
+    let needs_refresh = cached.as_ref().is_none_or(|snapshot| !snapshot.fresh(source_cache::now()));
+    let mut stale = cached.as_ref().is_some_and(|snapshot| !snapshot.fresh(source_cache::now()));
+    let mut discovery_error = source_cache::recent_error();
+    stale |= cached.is_some() && discovery_error.is_some();
+    let mut root_counts = std::collections::HashMap::new();
+    if let Some(item) = cached.as_ref().and_then(|snapshot| snapshot.items.iter().find(|item| item.url == current)) {
+        root_counts.insert(item.root.clone(), 1);
+    }
+    let mut remaining = AUTO_MIRROR_MAX.saturating_sub(attempted.len());
+    let mut queue = VecDeque::from([(FIXED[0].1.to_owned(), "main".to_owned())]);
+    if let Some(snapshot) = &cached { queue.extend(ordered_mirrors(&snapshot.items, rotation)); }
+
+    // Discovery and probes share one event loop: a fresh publisher result can
+    // fill free probe slots immediately, even while the main request is slow.
+    // Dropping JoinSet on the first healthy endpoint cancels all remaining work.
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut probing = 0_usize;
+    let mut refreshed = needs_refresh;
+    if needs_refresh {
+        tasks.spawn(async { SelectionEvent::Discovery(discover(false, false).await) });
+    }
+    loop {
+        while probing < PROBE_CONCURRENCY {
+            let Some(origin) = next_candidate(&mut queue, &mut attempted, &mut root_counts, &mut remaining) else { break };
+            tasks.spawn(async move { SelectionEvent::Probe(probe_hit(if is_fixed(&origin) { "main" } else { "mirror" }, &origin).await) });
+            probing += 1;
         }
-        for handle in handles {
-            if let Ok(hit) = handle.await {
+        if tasks.is_empty() {
+            // A fresh cached pool that fails gets one forced refresh, retaining
+            // the original per-root and total budgets and all attempted URLs.
+            if !refreshed && remaining > 0 {
+                refreshed = true;
+                tasks.spawn(async { SelectionEvent::Discovery(discover(true, false).await) });
+            } else {
+                break;
+            }
+        }
+        let Some(event) = tasks.join_next().await else { break };
+        match event {
+            Ok(SelectionEvent::Probe(mut hit)) => {
+                probing = probing.saturating_sub(1);
+                // A concurrent successful publication can remove an older hint.
+                // Do not return an endpoint that apply_base would now reject.
+                if hit.ok && !is_fixed(&hit.url) && !is_known_mirror(&hit.url) {
+                    hit.ok = false;
+                    hit.error = Some("镜像已不在最新有效发布列表中".into());
+                }
+                let healthy = hit.ok;
                 hits.push(hit);
+                if healthy { return selection_result(&hits, false, stale, discovery_error.as_deref()); }
+            }
+            Ok(SelectionEvent::Discovery(Ok(entry))) => {
+                stale = entry.stale;
+                discovery_error = entry.error;
+                // If this origin came only from line.json, its root becomes
+                // known at discovery time; its failed current probe still counts.
+                if let Some(item) = entry.snapshot.items.iter().find(|item| item.url == current) {
+                    root_counts.entry(item.root.clone()).or_insert(1);
+                }
+                queue = ordered_mirrors(&entry.snapshot.items, rotation).into();
+            }
+            Ok(SelectionEvent::Discovery(Err(error))) => discovery_error = Some(error),
+            Err(_) => {
+                // Panicking probe tasks must not permanently consume a slot.
+                probing = probing.saturating_sub(1);
             }
         }
     }
-    let mut result = pick_from_hits(&hits);
-    if let Err(error) = listing {
-        result["mirror_error"] = json!(error);
-    }
-    result
+    selection_result(&hits, false, stale, discovery_error.as_deref())
 }
 
 pub async fn try_main() -> Value {
@@ -742,8 +828,8 @@ mod tests {
             origins(&items),
             [
                 "https://one.example.com",
-                "https://two.example.com",
                 "https://one.two.example",
+                "https://two.example.com",
                 "https://two.two.example"
             ]
         );
@@ -811,7 +897,7 @@ mod tests {
             r#"<script src='/analytics.js'></script><script src="/publish.js"></script>"#,
         ] {
             let script = script_src(page, html).unwrap();
-            assert!(script.starts_with("https://huangguoai.pages.dev/publish.js"));
+            assert!(script.starts_with("https://huang-guo.pages.dev/publish.js"));
         }
         for target in [
             "http://huangguoai.pages.dev/publish.js",
@@ -828,55 +914,20 @@ mod tests {
         assert!(script_src(page, "<script src='analytics.js'></script>").is_err());
     }
 
-    fn page(source: &str, hosts: &[&str]) -> Result<PublishedPage, String> {
-        Ok(PublishedPage {
-            source: source.into(),
-            script: format!("{source}publish.js"),
-            items: hosts
-                .iter()
-                .map(|host| json!({"host": host, "url": format!("https://{host}")}))
-                .collect(),
-        })
+    fn page(source: &str) -> PublishedPage {
+        PublishedPage { source: source.into(), script: format!("{source}publish.js"),
+            items: vec![json!({"url": "https://mirror.example", "host": "mirror.example", "root": "mirror.example"})] }
     }
 
-    #[test]
-    fn publisher_failure_retains_other_success_and_current_is_display_only() {
-        let value = merge_publishers(
-            [
-                Err("timeout".into()),
-                page(PUBLISH_PAGES[1], &["a.example"]),
-            ],
-            "https://restored.example",
-        )
-        .unwrap();
-        assert_eq!(
-            origins(value["items"].as_array().unwrap()),
-            ["https://a.example"]
-        );
-        assert_eq!(value["recommended"][0]["url"], "https://restored.example");
-        assert_eq!(value["errors"].as_array().unwrap().len(), 1);
-        assert!(merge_publishers([Err("first".into()), Err("second".into())], FIXED[0].1).is_err());
-    }
-
-    #[test]
-    fn publisher_lists_interleave_and_deduplicate() {
-        let value = merge_publishers(
-            [
-                page(PUBLISH_PAGES[0], &["a.example", "c.example"]),
-                page(PUBLISH_PAGES[1], &["b.example", "a.example"]),
-            ],
-            "https://a.example",
-        )
-        .unwrap();
-        assert_eq!(
-            origins(value["items"].as_array().unwrap()),
-            [
-                "https://a.example",
-                "https://b.example",
-                "https://c.example"
-            ]
-        );
-        assert_eq!(value["recommended"].as_array().unwrap().len(), 3);
+    #[tokio::test]
+    async fn first_publisher_does_not_wait_for_blocked_primary_or_secondary() {
+        let winner = first_publisher(std::future::pending(), async { Ok(page(PUBLISH_PAGES[1])) }, Duration::ZERO).await.unwrap();
+        assert_eq!(winner.source, PUBLISH_PAGES[1]);
+        let winner = first_publisher(async { Ok(page(PUBLISH_PAGES[0])) }, std::future::pending(), PUBLISH_HEDGE).await.unwrap();
+        assert_eq!(winner.source, PUBLISH_PAGES[0]);
+        let winner = first_publisher(async { Err("primary down".into()) }, async { Ok(page(PUBLISH_PAGES[1])) }, PUBLISH_HEDGE).await.unwrap();
+        assert_eq!(winner.source, PUBLISH_PAGES[1]);
+        assert!(first_publisher(async { Err("first".into()) }, async { Err("second".into()) }, Duration::ZERO).await.is_err());
     }
 
     #[test]
@@ -914,31 +965,88 @@ mod tests {
     #[test]
     fn all_down_never_returns_a_line_to_switch_to() {
         for hits in [vec![], vec![hit("https://bad.example", false, 1)]] {
-            let selected = pick_from_hits(&hits);
+            let selected = selection_result(&hits, false, true, Some("publisher offline"));
             assert_eq!(selected["reason"], "all-down");
             assert_eq!(selected["base"], "");
             assert_eq!(selected["tier"], "none");
         }
-        let selected = pick_from_hits(&[
+        let selected = selection_result(&[
             hit("https://html.example", false, 1),
             hit("https://slow.example", true, 20),
             hit("https://fast.example", true, 8),
-        ]);
-        assert_eq!(selected["base"], "https://fast.example");
+        ], false, false, None);
+        assert_eq!(selected["base"], "https://slow.example");
     }
 
     #[test]
-    fn auto_candidates_require_publication_and_exclude_ai_landing_page() {
-        let items = [
-            json!({"url": FIXED[1].1}),
-            json!({"url": "https://published.example"}),
-            json!({"url": "https://untrusted.example"}),
-            json!({"url": "https://published.example"}),
-        ];
-        let candidates = auto_candidates(&items, "https://restored.example", |origin| {
-            origin == "https://published.example"
-        });
-        assert_eq!(candidates, ["https://published.example"]);
-        assert!(auto_candidates(&[], "https://restored.example", |_| true).is_empty());
+    fn parser_and_candidates_exclude_publishers_retired_and_duplicate_endpoints() {
+        let items = parse_mirrors("var urls=['huangguoai.ai','huangguo.ai','huang-guo.pages.dev','huangguoai.pages.dev','huangguoai.com','mirror.example','mirror.example'];").unwrap();
+        assert_eq!(origins(&items), ["https://mirror.example"]);
+        let subdomains = parse_mirrors("var urls=['huangguoai.ai','huang-guo.pages.dev','mirror.example']; var subdomains=['one'];").unwrap();
+        assert_eq!(origins(&subdomains), ["https://one.mirror.example"]);
+        assert_eq!(FIXED.len(), 1);
+        assert!(!is_fixed("https://huangguoai.ai"));
+    }
+
+    #[test]
+    fn root_round_robin_and_rotation_reach_the_rest_of_the_pool() {
+        let items = parse_mirrors("var urls=['a.example','b.example']; var subdomains=['one','two','three','four'];").unwrap();
+        assert_eq!(&origins(&items)[..4], ["https://one.a.example", "https://one.b.example", "https://two.a.example", "https://two.b.example"]);
+        let mirrors: Vec<Mirror> = items.into_iter().map(|item| serde_json::from_value(item).unwrap()).collect();
+        let first = ordered_mirrors(&mirrors, 0);
+        assert_eq!(first.len(), 6);
+        assert!(first.chunks(2).all(|pair| pair[0].1 != pair[1].1));
+        let later = ordered_mirrors(&mirrors, 3);
+        assert!(later.iter().any(|(origin, _)| origin == "https://four.a.example"));
+        assert!(!first.iter().any(|(origin, _)| origin == "https://four.a.example"));
+    }
+
+    #[test]
+    fn healthy_current_is_kept_even_when_another_hit_is_faster() {
+        let mut current = hit("https://current.example", true, 120);
+        current.tier = "mirror";
+        let result = selection_result(&[current, hit("https://fast.example", true, 8)], true, false, None);
+        assert_eq!(result["base"], "https://current.example");
+        assert_eq!(result["reason"], "kept-current");
+    }
+
+    #[test]
+    fn candidate_budget_deduplicates_and_advances_past_exhausted_roots() {
+        let mut queue: VecDeque<_> = (0..8).map(|index| (format!("https://a{index}.example"), "a.example".to_owned()))
+            .chain((0..8).map(|index| (format!("https://b{index}.example"), "b.example".to_owned()))).collect();
+        queue.push_front(("https://already.example".into(), "a.example".into()));
+        let mut attempted = HashSet::from(["https://already.example".into()]);
+        let mut roots = std::collections::HashMap::new();
+        let mut remaining = 5;
+        let mut selected = Vec::new();
+        while let Some(origin) = next_candidate(&mut queue, &mut attempted, &mut roots, &mut remaining) {
+            selected.push(origin);
+        }
+        assert_eq!(selected.len(), 5);
+        assert_eq!(roots["a.example"], PER_ROOT_MAX);
+        assert_eq!(roots["b.example"], 2);
+        assert_eq!(remaining, 0);
+        assert!(selected.iter().any(|origin| origin == "https://b0.example"));
+    }
+
+    #[test]
+    fn stale_discovery_schema_retains_items_and_reports_error_without_trust() {
+        let entry = Discovery {
+            snapshot: Snapshot { source: PUBLISH_PAGES[0].into(), script: format!("{}publish.js", PUBLISH_PAGES[0]), fetched_at: 123,
+                items: vec![Mirror { url: "https://mirror.example".into(), host: "mirror.example".into(), root: "mirror.example".into() }] },
+            stale: true,
+            error: Some("publisher unavailable".into()),
+        };
+        let value = entry.json();
+        assert_eq!(value["updated_at"], 123000);
+        assert_eq!(value["stale"], true);
+        assert_eq!(value["items"][0]["url"], "https://mirror.example");
+        assert_eq!(value["errors"], json!(["publisher unavailable"]));
+        assert_eq!(value["discovery_error"], "publisher unavailable");
+        let result = selection_result(&[], false, true, Some("publisher unavailable"));
+        assert_eq!(result["base"], "");
+        assert_eq!(result["reason"], "all-down");
+        assert_eq!(result["stale"], true);
+        assert_eq!(result["discovery_error"], "publisher unavailable");
     }
 }

@@ -57,7 +57,7 @@ export type Toast = {
   msg: string;
   icon?: "ok" | "heart" | "star" | "info";
   /** 线路切换专用的结构化内容，有这个就不看 msg */
-  line?: { region: "cn" | "intl"; host: string; ms: number };
+  line?: { kind: "main" | "mirror"; host: string; ms: number };
 };
 
 /** 观看记录：看到第几集、第几秒（`dur` 用来判断是否已看完） */
@@ -302,7 +302,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /** 自动选线切换成功后由 `autoLine.ts` 派发，这里只负责显示 */
   useEffect(() => {
     const onLine = (e: Event) => {
-      const d = (e as CustomEvent<{ region: "cn" | "intl"; host: string; ms: number }>).detail;
+      const d = (e as CustomEvent<{ kind: "main" | "mirror"; host: string; ms: number }>).detail;
       if (!d) return;
       const id = ++toastSeq.current;
       setToasts((t) => [...t.slice(-2), { id, msg: "", line: d }]);
@@ -311,12 +311,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener("hg:line", onLine);
     return () => window.removeEventListener("hg:line", onLine);
   }, []);
-  /** 自动选线：主站和发布页上的镜像全都不通。
-   *
-   * 只说一次（60s 节流）——巡检本身 10s 一轮，不节流会一直弹。
-   * 以前这种情况会悄悄切到 `.ai`（接口全 404），用户只看到「加载失败」，
-   * 根本不知道是网络的事。
-   */
+  /** 自动选线未找到健康候选；发现失败也可能导致候选不完整。提示按 60s 节流。 */
   useEffect(() => {
     let last = 0;
     const onDown = () => {
@@ -324,7 +319,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (now - last < 60_000) return;
       last = now;
       const id = ++toastSeq.current;
-      setToasts((t) => [...t.slice(-2), { id, msg: "线路全部不可用，请检查网络或代理", icon: "info" }]);
+      setToasts((t) => [...t.slice(-2), { id, msg: "暂未找到可用线路，已保留当前线路，请检查网络或代理", icon: "info" }]);
       window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3600);
     };
     window.addEventListener("hg:line-down", onDown);

@@ -69,16 +69,16 @@ export function ToastHost() {
           >
             <span
               className={`grid place-items-center size-9 rounded-[12px] shrink-0 ${
-                t.line.region === "cn"
+                t.line.kind === "main"
                   ? "bg-mint/15 text-mint"
                   : "bg-cyan/15 text-cyan"
               }`}
             >
-              {t.line.region === "cn" ? <IBoltF size={17} /> : <IGlobe size={17} />}
+              {t.line.kind === "main" ? <IBoltF size={17} /> : <IGlobe size={17} />}
             </span>
             <div className="min-w-0">
               <div className="text-[14px] font-semibold text-on leading-tight">
-                {t.line.region === "cn" ? "国内线路" : "国外线路"}
+                {t.line.kind === "main" ? "主站线路" : "镜像线路"}
               </div>
               <div className="text-[12px] text-dim leading-tight mt-0.5 truncate">{t.line.host}</div>
             </div>

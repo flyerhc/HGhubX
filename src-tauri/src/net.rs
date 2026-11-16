@@ -35,10 +35,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-/// 默认上游（固定线路 1）。
+/// 唯一固定业务线路。
 pub const DEFAULT_BASE: &str = "https://huangguoai.com";
 
-/// 当前上游基址（不带结尾斜杠）。可在设置里切到固定线路 2 或镜像线路，运行时立即生效。
+/// 当前上游基址（不带结尾斜杠），可以切到发布页发现的镜像或显式自定义线路。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LineConfig {
     base: String,
@@ -79,15 +79,16 @@ pub fn normalize_base(raw: &str) -> Option<String> {
     Some(parsed.origin().ascii_serialization())
 }
 
-/// 哪些 origin 允许携带凭据：两个固定入口，加上发布页推荐过、且当前可能作为线路的镜像。
+/// 哪些 origin 允许携带凭据：主站、当前运行期核实且未过期的发布镜像、显式自定义线路。
 ///
 /// 国内网络连不上 `.com`，只能用镜像；镜像和主站是同一后端、同一个账号体系。
 /// 自定义线路必须由用户显式保存；旧格式文件只恢复地址，不自动授予登录权限。
 /// 会话仍绑定 origin，切换地址不会把已有 token 发送给另一个站点。
 pub fn trusted_auth_origin(origin: &str) -> bool {
-    matches!(origin, "https://huangguoai.com" | "https://huangguoai.ai")
-        || crate::lines::is_trusted_mirror(origin)
-        || BASE.read().is_ok_and(|line| line.custom && line.base == origin)
+    !crate::lines::is_publisher_or_retired(origin)
+        && (crate::lines::is_fixed(origin)
+            || crate::lines::is_trusted_mirror(origin)
+            || BASE.read().is_ok_and(|line| line.custom && line.base == origin))
 }
 
 fn persisted_base(text: &str) -> Option<String> {
@@ -97,6 +98,11 @@ fn persisted_base(text: &str) -> Option<String> {
 
 fn persisted_line(text: &str) -> Option<LineConfig> {
     let base = persisted_base(text)?;
+    // A publisher is never a business source, including old explicit custom selections.
+    // Keep session origins untouched: credentials for the old origin cannot migrate.
+    if crate::lines::is_publisher_or_retired(&base) {
+        return Some(LineConfig::default());
+    }
     let value: Value = serde_json::from_str(text).ok()?;
     // Accept the fork's v2 format as well as legacy {base}. Only explicit v2
     // custom selections carry custom-origin consent across restarts.
@@ -111,10 +117,16 @@ pub fn bind_base(dir: &std::path::Path) {
     network_policy::bind_security(dir);
     crate::proxy::bind(dir);
     let path = dir.join("line.json");
-    let restored = std::fs::read_to_string(&path).ok()
-        .and_then(|text| persisted_line(&text)).unwrap_or_default();
+    let saved = std::fs::read_to_string(&path).ok();
+    let restored = saved.as_deref().and_then(persisted_line).unwrap_or_default();
+    let migrate = saved.as_deref().and_then(persisted_base)
+        .is_some_and(|base| crate::lines::is_publisher_or_retired(&base));
     if let Ok(mut current) = BASE.write() {
         *current = restored;
+        if migrate {
+            // Failure to rewrite the file must not restore the retired source in memory.
+            let _ = save_line(&mut current, LineConfig::default(), Some(&path));
+        }
     }
     if let Ok(mut f) = BASE_FILE.write() {
         *f = Some(path);
@@ -146,7 +158,10 @@ fn save_line(current: &mut LineConfig, next: LineConfig, path: Option<&std::path
 fn apply_base(url: &str, custom: bool) -> Result<String, String> {
     let next = normalize_base(url)
         .ok_or_else(|| "线路地址无效（需要纯 HTTPS 站点地址，禁止内网）".to_string())?;
-    if !custom && !crate::lines::is_fixed(&next) && !crate::lines::is_trusted_mirror(&next) {
+    if crate::lines::is_publisher_or_retired(&next) {
+        return Err("发布页只用于发现镜像，请选择主站或镜像线路".into());
+    }
+    if !custom && !crate::lines::is_fixed(&next) && !crate::lines::is_known_mirror(&next) {
         return Err("线路不在固定线路或可信发布页清单中".into());
     }
     let mut current = BASE.write().map_err(|_| "线路设置锁失败")?;
@@ -1320,7 +1335,11 @@ fn edge_redirect_target(
     if !guest_get || !matches!(status, 301 | 302 | 303) {
         return Err("业务接口重定向已拒绝".into());
     }
-    network_policy::redirect_target(current, location)
+    let target = network_policy::redirect_target(current, location)?;
+    if crate::lines::is_publisher_or_retired(&target.origin().ascii_serialization()) {
+        return Err("业务接口不得重定向到发布页".into());
+    }
+    Ok(target)
 }
 
 /// 业务请求：走边缘信封。
@@ -1332,6 +1351,9 @@ pub async fn edge(
     token: Option<&str>,
 ) -> Result<Value, String> {
     let cur = normalize_base(origin).ok_or("业务请求必须使用安全 HTTPS 线路")?;
+    if crate::lines::is_publisher_or_retired(&cur) {
+        return Err("发布页不提供业务接口，请选择主站或镜像线路".into());
+    }
     if network_policy::strict_security()
         && (token.is_some()
             || matches!(
@@ -1568,7 +1590,7 @@ mod tests {
         let other_custom = crate::proxy::Config::for_test("custom", "http://127.0.0.1:7898").unwrap();
         let initial = media_config_fingerprint(DEFAULT_BASE, true, &system, 17);
         // The origin participates even when media URLs happen to be identical.
-        assert_ne!(initial, media_config_fingerprint("https://huangguoai.ai", true, &system, 17));
+        assert_ne!(initial, media_config_fingerprint("https://mirror.fixture.invalid", true, &system, 17));
         assert_ne!(initial, media_config_fingerprint(DEFAULT_BASE, false, &system, 17));
         assert_ne!(initial, media_config_fingerprint(DEFAULT_BASE, true, &system, 18));
         assert_ne!(initial, media_config_fingerprint(DEFAULT_BASE, true, &direct, 17));
@@ -1901,7 +1923,7 @@ mod tests {
 
     #[test]
     fn edge_redirects_only_replay_anonymous_reads() {
-        let current = url::Url::parse("https://huangguoai.ai/api/edge/request").unwrap();
+        let current = url::Url::parse("https://mirror.fixture.invalid/api/edge/request").unwrap();
         assert_eq!(
             edge_redirect_target(
                 &current,
@@ -1922,6 +1944,9 @@ mod tests {
         }
         assert!(edge_redirect_target(&current, 301, "http://example.com/", true).is_err());
         assert!(edge_redirect_target(&current, 301, "https://127.0.0.1/", true).is_err());
+        for host in ["huangguoai.ai", "huangguo.ai", "huang-guo.pages.dev", "huangguoai.pages.dev"] {
+            assert!(edge_redirect_target(&current, 302, &format!("https://{host}/api/edge/request"), true).is_err());
+        }
     }
 
     #[test]
@@ -1956,7 +1981,9 @@ mod tests {
             assert_eq!(normalize_base(raw), None, "{raw}");
         }
         assert!(trusted_auth_origin(DEFAULT_BASE));
-        assert!(trusted_auth_origin("https://huangguoai.ai"));
+        assert!(!trusted_auth_origin("https://huangguoai.ai"));
+        assert!(!trusted_auth_origin("https://huang-guo.pages.dev"));
+        assert!(!trusted_auth_origin("https://huangguoai.pages.dev"));
         assert!(!trusted_auth_origin("https://mirror.example"));
         assert!(!trusted_auth_origin("https://huangguoai.com.evil.example"));
     }
@@ -1995,6 +2022,28 @@ mod tests {
         }
         assert!(persisted_line(r#"{"v":2,"base":"https://mirror.fixture.invalid/","custom":true}"#).unwrap().custom);
         assert!(!persisted_line(r#"{"v":2,"base":"https://huangguoai.com","custom":true}"#).unwrap().custom);
+    }
+
+    #[test]
+    fn retired_sources_and_publishers_migrate_even_with_custom_consent() {
+        for host in ["huangguoai.ai", "huangguo.ai", "huang-guo.pages.dev", "huangguoai.pages.dev"] {
+            for custom in [false, true] {
+                let text = json!({ "v": 2, "base": format!("https://{host}/"), "custom": custom }).to_string();
+                assert_eq!(persisted_line(&text), Some(LineConfig::default()));
+            }
+            assert_eq!(persisted_line(&json!({ "base": format!("https://{host}") }).to_string()), Some(LineConfig::default()));
+            for custom in [false, true] {
+                assert!(apply_base(&format!("https://{host}"), custom).unwrap_err().contains("发布页"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn publishers_never_receive_business_envelopes() {
+        for host in ["huangguoai.ai", "huangguo.ai", "huang-guo.pages.dev", "huangguoai.pages.dev"] {
+            let error = edge(&format!("https://{host}"), "GET", "/api/videos", None, None).await.unwrap_err();
+            assert!(error.contains("发布页不提供业务接口"));
+        }
     }
 
     #[test]

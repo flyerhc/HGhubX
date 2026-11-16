@@ -67,6 +67,12 @@ const READ_ONLY = new Set([
 export type NetObserver = (r: { ok: boolean; cmd: string; msg?: string; networkish?: boolean }) => void;
 let netObserver: NetObserver | null = null;
 export const setNetObserver = (fn: NetObserver | null) => { netObserver = fn; };
+let networkEpoch = 0;
+let sourceEpoch = 0;
+export const invalidateNetObservations = () => { networkEpoch++; };
+const networkChanged = () => { sourceEpoch++; invalidateNetObservations(); };
+window.addEventListener("hg:line-changed", networkChanged);
+window.addEventListener("hg:proxy-changed", networkChanged);
 const notifyNet = (r: Parameters<NetObserver>[0]) => {
   try { netObserver?.(r); } catch { /* 观察者不能影响请求本身 */ }
 };
@@ -76,10 +82,13 @@ const failMessage = (msg: string, status?: string) =>
     : msg.length > 140 ? `${msg.slice(0, 140)}…` : msg;
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const epoch = networkEpoch;
+  const source = sourceEpoch;
+  const notify = (result: Parameters<NetObserver>[0]) => { if (epoch === networkEpoch) notifyNet(result); };
   const once = () => invoke(cmd, args) as Promise<T>;
   try {
     const r = await once();
-    notifyNet({ ok: true, cmd });
+    notify({ ok: true, cmd });
     return r;
   } catch (e) {
     const msg = typeof e === "string" ? e : "请求失败，请检查网络";
@@ -88,26 +97,28 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
     // 落盘完整错误链（dns error / connection refused / 证书错误…），toast 只显示截断版
     logLine(`[api] ${cmd} → ${msg}`);
     tracePlayback("api.fail", { cmd, err: msg, status: status ?? null, networkish });
-    notifyNet({ ok: false, cmd, msg, networkish });
     // 线路可能正被自动切走：给切换留一点时间，只读请求重试一次，用户就不用看见这条错误
     if (networkish && READ_ONLY.has(cmd)) {
       logLine(`[api] ${cmd} 链路异常，1.2s 后重试一次`);
       tracePlayback("api.retry", { cmd, err: msg });
       await new Promise((r) => setTimeout(r, 1200));
+      if (source !== sourceEpoch) throw new Error(failMessage(msg, status));
       try {
         const r = await once();
         logLine(`[api] ${cmd} 重试成功`);
         tracePlayback("api.retry_ok", { cmd });
-        notifyNet({ ok: true, cmd });
+        notify({ ok: true, cmd });
         return r;
       } catch (e2) {
         const again = typeof e2 === "string" ? e2 : msg;
         const againStatus = /^HTTP (\d{3})\b/.exec(again)?.[1];
         logLine(`[api] ${cmd} 重试仍失败 → ${again}`);
         tracePlayback("api.retry_failed", { cmd, err: again, status: againStatus ?? null });
+        notify({ ok: false, cmd, msg: again, networkish: !againStatus && NET_FAIL.test(again) });
         throw new Error(failMessage(again, againStatus));
       }
     }
+    notify({ ok: false, cmd, msg, networkish });
     throw new Error(failMessage(msg, status));
   }
 }
@@ -190,7 +201,7 @@ export const api = {
   collect: (id: number, on: boolean, identity?: AccountIdentity) => call<unknown>("api_collect", { id, on, expectedUserId: identity?.expectedUserId, expectedOrigin: identity?.expectedOrigin }),
   follow: (uid: number, on: boolean, identity?: AccountIdentity) => call<unknown>("api_follow", { uid, on, expectedUserId: identity?.expectedUserId, expectedOrigin: identity?.expectedOrigin }),
 
-  /* 线路（数据源）：固定线路写死在 Rust 侧，镜像线路从地址发布页拉、推荐镜像从发布入口页拉 */
+  /* 主站与发布页中的镜像；发布页本身不作为内容源。 */
   lineState: () => call<LineState>("line_state"),
   lineSet: (url: string) => call<string>("line_set", { url }),
   lineCustomSet: (url: string) => call<LineApply>("line_custom_set", { url }),
@@ -199,8 +210,6 @@ export const api = {
   lineMirrors: () => call<LineMirrors>("line_mirrors"),
   lineProbe: (urls: string[]) => call<LineProbe[]>("line_probe", { urls }),
   lineAuto: () => call<LineAuto>("line_auto"),
-  /* 当前是镜像时敲一次主站，通了就切回（不清会话） */
-  lineTryMain: () => call<LineTryMain>("line_try_main"),
   /* 线路体检：探一次 /api/videos，和自动选线同一判据 */
   lineHealth: () => call<LineHealth>("line_health"),
 
@@ -234,7 +243,11 @@ export type UpdateInfo = {
 export type LineItem = { name?: string; url: string; host?: string };
 export type LineState = { base: string; default: string; fixed: LineItem[]; custom?: boolean };
 export type LineApply = { base: string; custom: boolean };
-export type LineMirrors = { source: string; script?: string; items: LineItem[]; recommended_source?: string; recommended: LineItem[] };
+export type LineMirrors = {
+  source: string; script?: string; items: LineItem[];
+  cached?: boolean; stale?: boolean; errors?: string[]; updated_at?: string | number; discovery_error?: string;
+  recommended_source?: string; recommended?: LineItem[];
+};
 export type LineProbe = { url: string; ok: boolean; status?: number; ms: number; error?: string };
 export type LineHealth = { base: string; ok: boolean; ms: number; status: number | null };
 
@@ -250,9 +263,9 @@ export type ProxyState = {
 };
 export type ProxyProbe = { ok: boolean; status?: number | null; ms: number; error?: string; via?: string };
 
-/** 自动选线：主站可用时优先，否则检测可信发布页中的镜像。 */
+/** 自动选线：保持健康的当前源，失效后检测主站与已发布镜像。 */
 export type LineAutoCandidate = {
-  tier: "main" | "cn" | "mirror";
+  tier: "current" | "main" | "mirror" | "custom";
   url: string;
   ok: boolean;
   reachable: boolean;
@@ -266,20 +279,13 @@ export type LineAuto = {
   switched: boolean;
   pick: {
     base: string;
-    tier: "main" | "cn" | "mirror" | "none";
+    tier: "current" | "main" | "mirror" | "custom" | "none";
     ms: number;
     reason: string;
     candidates: LineAutoCandidate[];
+    stale?: boolean;
+    discovery_error?: string;
   };
-};
-
-/** 回切主站的探测结果：`probe.ok` 为主站到底通不通 */
-export type LineTryMain = {
-  cancelled?: boolean;
-  previous: string;
-  base: string;
-  switched: boolean;
-  probe: { ok: boolean; base: string; tier: string; ms: number; status: number | null };
 };
 
 /** `https://a.b/c` → `a.b`（线路展示用） */

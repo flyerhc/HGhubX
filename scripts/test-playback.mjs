@@ -1,6 +1,6 @@
 // Local-only headless playback checks. No upstream APIs, credentials or Tauri IPC are used.
 import assert from "node:assert/strict";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { appendFileSync } from "node:fs";
@@ -12,16 +12,21 @@ import { chromium } from "playwright-core";
 import { createServer as createViteServer } from "vite";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const scriptScenarios = {
+  "ios-native": { script: "test-ios-native-media.mjs", timeout: 180000, metrics: { transport: "mock IPC/HLS; real Player/VideoSurface" } },
+  review: { script: "test-round-review.mjs", timeout: 480000, metrics: { focused_checks: true } },
+  lines: { script: "test-line-selection.mjs", timeout: 180000, metrics: { transport: "mock Tauri IPC; real Settings/LinePicker/store/autoLine" } },
+};
 const { values: args } = parseArgs({ options: {
   "media-dir": { type: "string" }, output: { type: "string" }, "browser-executable": { type: "string" },
   scenarios: { type: "string", default: "seek,legacy,stall,lifecycle,mms,gesture,proxy" }, help: { type: "boolean" },
 } });
 if (args.help) {
-  console.log("pnpm test:playback [--media-dir DIR] [--output NEW_DIR] [--browser-executable PATH] [--scenarios seek,legacy,stall,lifecycle,mms,gesture,proxy,ios-native,recovery,review]");
+  console.log("pnpm test:playback [--media-dir DIR] [--output NEW_DIR] [--browser-executable PATH] [--scenarios seek,legacy,stall,lifecycle,mms,gesture,proxy,ios-native,recovery,review,lines]");
   process.exit(0);
 }
 const scenarios = args.scenarios.split(",");
-assert(scenarios.length && scenarios.every(s => ["seek", "legacy", "stall", "lifecycle", "mms", "gesture", "proxy", "ios-native", "recovery", "review"].includes(s)), "Unknown scenario");
+assert(scenarios.length && scenarios.every(s => ["seek", "legacy", "stall", "lifecycle", "mms", "gesture", "proxy", "ios-native", "recovery", "review", "lines"].includes(s)), "Unknown scenario");
 const output = resolve(args.output || join(root, "test-results", "playback", new Date().toISOString().replace(/[:.]/g, "-")));
 await mkdir(dirname(output), { recursive: true });
 await mkdir(output); // Refuse to overwrite artifacts from an earlier run.
@@ -533,7 +538,9 @@ async function explicitRecoveryCheck(page) {
 }
 
 try {
-  if (scenarios.some(name => name !== "ios-native")) {
+  // These standalone scripts own their browser/fixtures; no parent media stack
+  // is needed unless at least one actual playback scenario is requested.
+  if (scenarios.some(name => !Object.hasOwn(scriptScenarios, name))) {
     let mediaDir = args["media-dir"] && resolve(args["media-dir"]);
     if (!mediaDir) {
       temporaryMedia = await mkdtemp(join(tmpdir(), "hghubx-playback-")); mediaDir = temporaryMedia;
@@ -541,7 +548,9 @@ try {
         execFileSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "90", "-c:v", "libx264", "-preset", "ultrafast", "-g", "30", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-c:a", "aac", "-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod", "-hls_segment_filename", join(mediaDir, "seg%03d.ts"), join(mediaDir, "list.m3u8")], { timeout: 60000, stdio: "pipe" });
       } catch { throw new Error("Cannot generate HLS fixture: install FFmpeg (libx264/AAC), set FFMPEG_PATH, or pass --media-dir DIR"); }
     }
-    vite = await createViteServer({ root, server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, open: false } });
+    // Child checks may use aliases or different optimizeDeps settings. Keep
+    // their dependency graphs out of this still-running playback server.
+    vite = await createViteServer({ root, cacheDir: join(root, "node_modules/.vite-playback"), server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, open: false } });
     await vite.listen(); report.ui = `http://127.0.0.1:${vite.httpServer.address().port}`;
     media = await serveMedia(mediaDir); report.media = `http://127.0.0.1:${media.address().port}`;
     browser = await chromium.launch({ headless: true, executablePath: args["browser-executable"], args: ["--autoplay-policy=no-user-gesture-required"] });
@@ -549,16 +558,17 @@ try {
   }
   for (const name of scenarios) {
     const dir = join(output, name); await mkdir(dir);
-    if (name === "ios-native") {
+    const scripted = scriptScenarios[name];
+    if (scripted) {
       const result = { name, status: "running", started: new Date().toISOString() }; report.cases.push(result);
       let stdout = "", stderr = "";
       try {
-        const child = await promisify(execFile)(process.execPath, [join(root, "scripts/test-ios-native-media.mjs")], {
-          cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 2 * 1024 * 1024,
-          env: { ...process.env, ...(args["browser-executable"] ? { BROWSER_EXECUTABLE: args["browser-executable"] } : {}) },
+        const child = await promisify(execFile)(process.execPath, [join(root, "scripts", scripted.script)], {
+          cwd: root, encoding: "utf8", timeout: scripted.timeout, maxBuffer: 4 * 1024 * 1024,
+          env: { ...process.env, BROWSER_EXECUTABLE: args["browser-executable"] || process.env.BROWSER_EXECUTABLE || chromium.executablePath() },
         });
         stdout = child.stdout; stderr = child.stderr;
-        result.metrics = { exit_code: 0, transport: "mock IPC/HLS; real Player/VideoSurface" };
+        result.metrics = { exit_code: 0, ...scripted.metrics };
         result.status = "passed"; console.log(`PASS ${name}: ${JSON.stringify(result.metrics)}`);
       } catch (error) {
         stdout = error.stdout || ""; stderr = error.stderr || "";
@@ -599,20 +609,6 @@ try {
     const result = { name, status: "running", started: new Date().toISOString() }; report.cases.push(result);
     let deadline;
     try {
-      if (name === "review") {
-        result.metrics = await new Promise((resolve, reject) => {
-          const child = spawn(process.execPath, [join(root, "scripts/test-round-review.mjs")], {
-            cwd: root,
-            env: { ...process.env, BROWSER_EXECUTABLE: args["browser-executable"] || chromium.executablePath() },
-            stdio: "inherit",
-          });
-          child.once("error", reject);
-          child.once("close", code => code === 0 ? resolve({ focused_checks: true }) : reject(new Error(`Round review checks exited ${code}`)));
-        });
-        result.status = "passed";
-        console.log(`PASS ${name}: ${JSON.stringify(result.metrics)}`);
-        continue;
-      }
       const action = name === "recovery" ? explicitRecoveryCheck(page) : name === "proxy" ? proxyRecoveryCheck(page) : name === "gesture" ? gestureChecks(page) : name === "seek" || name === "legacy" ? seekChecks(page, name === "legacy") : name === "stall" ? stallCheck(page) : name === "mms" ? managedMediaCheck(page) : lifecycleCheck(page);
       result.metrics = await Promise.race([action, new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("Scenario exceeded 45 seconds")), 45000); })]);
       assert.deepEqual(pageErrors, [], "Browser script errors");
