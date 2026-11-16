@@ -105,13 +105,14 @@ pub fn run() {
             let _ = (webview, payload);
         })
         .setup(|app| {
+            let state: tauri::State<Api> = app.state();
+            state.session.configure_package(&app.config().identifier);
             if let Ok(dir) = app.path().app_data_dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 // 上次选择的线路（设置 → 线路）在启动时恢复
                 lines::bind(&dir);
                 net::bind_base(&dir);
                 playback_log::bind(&dir);
-                let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }
             // Linux 的 <video> 由 GStreamer 播放，它只认常规 HTTP scheme；
@@ -213,6 +214,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             api::app_boot,
+            api::tv_migration_complete,
             media_http_origin,
             playback_log::playback_log_status,
             playback_log::playback_log_set,

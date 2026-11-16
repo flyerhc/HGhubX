@@ -1,6 +1,7 @@
 @import "tailwindcss" source(none);
 /* Only shipping UI contributes utilities, not tests, reports or old artifacts. */
 @source "./";
+@source not "./tv";
 @source "../index.html";
 @import "./styles/ios.css";
 

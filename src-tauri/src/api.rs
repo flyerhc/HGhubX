@@ -1,7 +1,7 @@
 //! 业务命令：登录 / 列表 / 详情 / 播放 / 互动。
 
 use crate::net::{base, edge};
-use crate::session::{Session, SessionStore};
+use crate::session::{MigrationIdentity, Session, SessionStore};
 use serde_json::{json, Value};
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
@@ -589,6 +589,8 @@ fn request_ios_orientation(landscape: bool) {
 
 #[tauri::command]
 pub async fn app_boot(state: State<'_, Api>) -> Result<Value, String> {
+    let local_mode = state.session.local_mode();
+    let pending_migration_identity = state.session.pending_migration()?;
     let origin = base();
     if crate::network_policy::strict_security()
         && state.session.token(&origin).is_some()
@@ -605,7 +607,14 @@ pub async fn app_boot(state: State<'_, Api>) -> Result<Value, String> {
         "base": origin,
         "strict_security": crate::network_policy::strict_security(),
         "cli_relaxed": crate::network_policy::cli_strict_override() == Some(false),
+        "local_mode": local_mode,
+        "pending_migration_identity": pending_migration_identity,
     }))
+}
+
+#[tauri::command]
+pub async fn tv_migration_complete(state: State<'_, Api>, identity: Option<MigrationIdentity>) -> Result<(), String> {
+    state.session.complete_migration(identity)
 }
 
 /// 切换严格安全模式（关闭后回退到兼容清洗与网络守卫模式，立即生效并落盘）。
@@ -626,6 +635,7 @@ pub async fn api_login(
     username: String,
     password: String,
 ) -> Result<Value, String> {
+    if state.session.local_mode() { return Err("TV 使用本机片库模式".into()); }
     let origin = base();
     let revision = state.session.revision();
     let data = edge(
@@ -659,6 +669,7 @@ pub async fn api_register(
     password: String,
     email: String,
 ) -> Result<Value, String> {
+    if state.session.local_mode() { return Err("TV 使用本机片库模式".into()); }
     let origin = base();
     let revision = state.session.revision();
     let mut body = json!({

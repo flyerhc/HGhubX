@@ -3,6 +3,7 @@ import { addPluginListener, invoke } from "@tauri-apps/api/core";
 import { platform } from "../api";
 import { acceptUsageAgreement, USAGE_AGREEMENT_VERSION } from "../usageAgreement";
 import "../styles/usage-agreement.css";
+import type { RegisterStartupBack } from "./LaunchAnimation";
 
 /** Shared verbatim text for first-run signing and read-only review in Settings. */
 export function UsageAgreementText() {
@@ -16,7 +17,7 @@ export function UsageAgreementText() {
   </div>;
 }
 
-export default function UsageAgreement({ onAccept }: { onAccept: () => void }) {
+export default function UsageAgreement({ onAccept, registerBack }: { onAccept: () => void; registerBack?: RegisterStartupBack }) {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -26,6 +27,7 @@ export default function UsageAgreement({ onAccept }: { onAccept: () => void }) {
 
   useEffect(() => { titleRef.current?.focus({ preventScroll: true }); }, [declined]);
   useEffect(() => {
+    if (registerBack) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); setDeclined(true); }
       if (event.key !== "Tab") return;
@@ -40,8 +42,9 @@ export default function UsageAgreement({ onAccept }: { onAccept: () => void }) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [registerBack]);
   useEffect(() => {
+    if (registerBack) return registerBack(() => setDeclined(true));
     if (platform !== "android") return;
     let disposed = false;
     let listener: { unregister: () => Promise<void> } | undefined;
@@ -50,7 +53,7 @@ export default function UsageAgreement({ onAccept }: { onAccept: () => void }) {
       else listener = handle;
     }).catch(() => {});
     return () => { disposed = true; void listener?.unregister().catch(() => {}); };
-  }, []);
+  }, [registerBack]);
 
   const accept = () => {
     if (!confirmed) return;
@@ -68,28 +71,28 @@ export default function UsageAgreement({ onAccept }: { onAccept: () => void }) {
     void invoke("plugin:app|exit", { code: 0 }).catch(() => setError("应用尚未进入主界面，你可以直接关闭窗口。")).finally(() => setExiting(false));
   };
 
-  return <div className="hg-agreement" role="dialog" aria-modal="true" aria-labelledby="hg-agreement-title" aria-describedby="hg-agreement-summary">
+  return <div className="hg-agreement" data-tv-modal="agreement" role="dialog" aria-modal="true" aria-labelledby="hg-agreement-title" aria-describedby="hg-agreement-summary">
     <div ref={panelRef} className="hg-agreement-card">
       <header className="hg-agreement-header">
         <div className="hg-agreement-kicker">HGhubX · 使用前确认</div>
         <h1 ref={titleRef} tabIndex={-1} id="hg-agreement-title">{declined ? "应用尚未启动" : "使用条款与免责声明"}</h1>
         <p id="hg-agreement-summary" className="hg-agreement-summary">{declined ? "你尚未同意协议，主界面与内容不会加载。你可以关闭应用，或返回重新阅读。" : "请阅读以下条款，特别是地区限制。同意记录仅保存在本设备，条款更新后需重新确认。"}</p>
       </header>
-      {!declined && <div className="hg-agreement-scroll" tabIndex={0} data-tv-scroll data-tv-initial aria-label="协议正文">
+      {!declined && <div className="hg-agreement-scroll" data-tv-focus="agreement-text" tabIndex={0} data-tv-scroll data-tv-initial aria-label="协议正文">
         <UsageAgreementText />
       </div>}
       <footer className="hg-agreement-footer">
         {error && <p className="hg-agreement-error" role="alert">{error}</p>}
-        {!declined && <label className="hg-agreement-check"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />
+        {!declined && <label className="hg-agreement-check"><input data-tv-focus="agreement-checkbox" type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />
           <span>我已阅读并同意以上条款，符合年龄要求，并承诺遵守中国大陆下载与传播限制。</span>
         </label>}
         <div className="hg-agreement-actions">
           {declined ? <>
-            {platform !== "ios" && <button type="button" className="hg-agreement-exit" onClick={exit} disabled={exiting}>退出应用</button>}
-            <button type="button" className="hg-agreement-accept" onClick={() => { setDeclined(false); setConfirmed(false); setError(""); }}>返回阅读</button>
+            {platform !== "ios" && <button data-tv-focus="agreement-exit" type="button" className="hg-agreement-exit" onClick={exit} disabled={exiting}>退出应用</button>}
+            <button data-tv-focus="agreement-read" type="button" className="hg-agreement-accept" onClick={() => { setDeclined(false); setConfirmed(false); setError(""); }}>返回阅读</button>
           </> : <>
-            <button type="button" className="hg-agreement-exit" onClick={() => { setDeclined(true); setConfirmed(false); }}>不同意</button>
-            <button type="button" className="hg-agreement-accept" disabled={!confirmed} onClick={accept}>签署同意并继续</button>
+            <button data-tv-focus="agreement-decline" type="button" className="hg-agreement-exit" onClick={() => { setDeclined(true); setConfirmed(false); }}>不同意</button>
+            <button data-tv-focus="agreement-accept" type="button" className="hg-agreement-accept" disabled={!confirmed} onClick={accept}>签署同意并继续</button>
           </>}
         </div>
         <p className="hg-agreement-footnote">协议版本 {USAGE_AGREEMENT_VERSION}</p>

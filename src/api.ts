@@ -130,6 +130,8 @@ export const api = {
     call<{
       user: User | null;
       logged_in: boolean;
+      local_mode?: boolean;
+      pending_migration_identity?: { origin: string; user_id: number } | null;
       base: string;
       strict_security?: boolean;
       cli_relaxed?: boolean;

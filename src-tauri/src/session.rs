@@ -2,7 +2,37 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+
+/// This is a cache selector, never an authentication capability.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MigrationIdentity {
+    pub origin: String,
+    pub user_id: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TvMigration {
+    version: u8,
+    pending: Option<MigrationIdentity>,
+    complete: bool,
+}
+
+fn write_durable(path: &std::path::Path, value: &impl Serialize) -> Result<(), String> {
+    use std::io::Write;
+    let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    let temporary = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&temporary).map_err(|error| error.to_string())?;
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, path).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent).and_then(|dir| dir.sync_all()).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Session {
@@ -93,6 +123,8 @@ mod tests {
 pub struct SessionStore {
     pub file: Mutex<Option<PathBuf>>,
     pub current: Mutex<Session>,
+    local_mode: AtomicBool,
+    migration_lock: Mutex<()>,
 }
 
 impl SessionStore {
@@ -100,12 +132,28 @@ impl SessionStore {
         Self {
             file: Mutex::new(None),
             current: Mutex::new(Session::default()),
+            local_mode: AtomicBool::new(false),
+            migration_lock: Mutex::new(()),
         }
+    }
+
+    /// Package identity is selected by native configuration, not by frontend input.
+    pub fn configure_package(&self, identifier: &str) {
+        self.local_mode.store(identifier == "com.hghubx.tv", Ordering::Release);
+    }
+
+    pub fn local_mode(&self) -> bool {
+        self.local_mode.load(Ordering::Acquire)
     }
 
     pub fn bind(&self, dir: PathBuf) {
         let mut path = dir;
         path.push("session.json");
+        if self.local_mode() {
+            // Do not restore credentials even if preparing the migration later fails.
+            *self.file.lock().unwrap() = Some(path);
+            return;
+        }
         if let Ok(text) = std::fs::read_to_string(&path) {
             if let Ok(sess) = serde_json::from_str::<Session>(&text) {
                 *self.current.lock().unwrap() = sess;
@@ -114,12 +162,74 @@ impl SessionStore {
         *self.file.lock().unwrap() = Some(path);
     }
 
+    /// Persist the exact old identity before erasing credentials. This is retried
+    /// from app_boot after interrupted writes; the completed tombstone is retained.
+    pub fn pending_migration(&self) -> Result<Option<MigrationIdentity>, String> {
+        if !self.local_mode() { return Ok(None); }
+        let _guard = self.migration_lock.lock().map_err(|_| "TV 迁移状态锁失败")?;
+        self.prepare_migration().map(|state| state.pending)
+    }
+
+    fn prepare_migration(&self) -> Result<TvMigration, String> {
+        let session_path = self.file.lock().map_err(|_| "TV 存储路径锁失败")?
+            .clone().ok_or("TV 本机存储尚未就绪")?;
+        let migration_path = session_path.with_file_name("tv-library-migration.json");
+        let migration = match std::fs::read_to_string(&migration_path) {
+            Ok(text) => {
+                let state: TvMigration = serde_json::from_str(&text).map_err(|_| "TV 迁移记录读取失败，请保留本机数据后重试")?;
+                if state.version != 1 || (state.complete && state.pending.is_some()) {
+                    return Err("TV 迁移记录版本异常".into());
+                }
+                state
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let session = match std::fs::read_to_string(&session_path) {
+                    Ok(text) => Some(serde_json::from_str::<Session>(&text)
+                        .map_err(|_| "旧会话格式异常，迁移尚未完成，请保留本机数据后重试")?),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(format!("旧会话读取失败：{error}")),
+                };
+                let pending = session.and_then(|session| {
+                    if session.token.is_empty() { return None; }
+                    let user_id = session.user.get("id")?.as_u64()?;
+                    if user_id == 0 || user_id > 9_007_199_254_740_991 { return None; }
+                    let parsed = url::Url::parse(&session.origin).ok()?;
+                    if !matches!(parsed.scheme(), "http" | "https")
+                        || parsed.origin().ascii_serialization() != session.origin { return None; }
+                    Some(MigrationIdentity { origin: session.origin, user_id })
+                });
+                let state = TvMigration { version: 1, pending, complete: false };
+                write_durable(&migration_path, &state).map_err(|error| format!("TV 迁移身份保存失败：{error}"))?;
+                state
+            }
+            Err(error) => return Err(format!("TV 迁移记录读取失败：{error}")),
+        };
+        // A failure here preserves the durable pending identity and blocks the
+        // frontend acknowledgement. Memory has never held the old session.
+        write_durable(&session_path, &Session::default()).map_err(|error| format!("TV 旧会话清理失败：{error}"))?;
+        Ok(migration)
+    }
+
+    pub fn complete_migration(&self, expected: Option<MigrationIdentity>) -> Result<(), String> {
+        if !self.local_mode() { return Err("当前安装未启用 TV 本地模式".into()); }
+        let _guard = self.migration_lock.lock().map_err(|_| "TV 迁移状态锁失败")?;
+        let state = self.prepare_migration()?;
+        if state.complete { return Ok(()); }
+        if state.pending != expected { return Err("TV 待迁移身份已变化，请重启后重试".into()); }
+        let path = self.file.lock().map_err(|_| "TV 存储路径锁失败")?
+            .clone().ok_or("TV 本机存储尚未就绪")?.with_file_name("tv-library-migration.json");
+        write_durable(&path, &TvMigration { version: 1, pending: None, complete: true })
+            .map_err(|error| format!("TV 迁移确认保存失败：{error}"))
+    }
+
     pub fn token(&self, origin: &str) -> Option<String> {
+        if self.local_mode() { return None; }
         let cur = self.current.lock().unwrap();
         (cur.origin == origin && !cur.token.is_empty()).then(|| cur.token.clone())
     }
 
     pub fn user(&self, origin: &str) -> serde_json::Value {
+        if self.local_mode() { return serde_json::Value::Null; }
         let cur = self.current.lock().unwrap();
         if cur.origin == origin && !cur.token.is_empty() {
             cur.user.clone()
@@ -129,6 +239,7 @@ impl SessionStore {
     }
 
     pub fn snapshot(&self, origin: &str) -> Option<Session> {
+        if self.local_mode() { return None; }
         let cur = self.current.lock().unwrap();
         (cur.origin == origin && !cur.token.is_empty()).then(|| cur.clone())
     }
@@ -138,6 +249,7 @@ impl SessionStore {
     }
 
     pub fn set_if_revision(&self, expected_revision: u64, origin: &str, token: String, user: serde_json::Value) -> bool {
+        if self.local_mode() { return false; }
         {
             let mut cur = self.current.lock().unwrap();
             if cur.revision != expected_revision { return false; }
@@ -158,10 +270,12 @@ impl SessionStore {
     }
 
     pub fn is_current(&self, expected: &Session) -> bool {
+        if self.local_mode() { return false; }
         Self::same_identity(&self.current.lock().unwrap(), expected)
     }
 
     pub fn update_user_if_current(&self, expected: &Session, user: serde_json::Value) -> bool {
+        if self.local_mode() { return false; }
         {
             let mut cur = self.current.lock().unwrap();
             if !Self::same_identity(&cur, expected) || user.get("id") != expected.user.get("id") {
@@ -187,6 +301,7 @@ impl SessionStore {
     }
 
     pub fn set(&self, origin: &str, token: String, user: serde_json::Value) {
+        if self.local_mode() { return; }
         {
             let mut cur = self.current.lock().unwrap();
             cur.origin = origin.to_string();
@@ -209,6 +324,8 @@ impl SessionStore {
     }
 
     fn persist(&self) {
+        // Only prepare_migration may clear the old file, after identity is durable.
+        if self.local_mode() { return; }
         // Keep state locked through the write so a slower earlier writer cannot persist over a new login.
         let snapshot = self.current.lock().unwrap();
         if let Some(path) = self.file.lock().unwrap().as_ref() {
