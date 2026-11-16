@@ -118,6 +118,96 @@ mod tests {
         assert!(!store.set_if_revision(revision, origin, "late".into(), json!({"id": 1})));
         assert_eq!(store.user(origin)["id"], 2);
     }
+
+    struct FixtureDir(PathBuf);
+    impl FixtureDir {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let nonce = NEXT.fetch_add(1, Ordering::Relaxed);
+            let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let path = std::env::temp_dir().join(format!("hghubx-tv-session-{}-{clock}-{nonce}", std::process::id()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn seed(&self) {
+            std::fs::write(self.0.join("session.json"), json!({
+                "origin":"https://example.com", "token":"old-credential", "user":{"id":17,"nickname":"old-profile"}
+            }).to_string()).unwrap();
+        }
+        fn tv(&self) -> SessionStore {
+            let store = SessionStore::new();
+            store.configure_package("com.hghubx.tv");
+            store.bind(self.0.clone());
+            store
+        }
+    }
+    impl Drop for FixtureDir {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    #[test]
+    fn tv_records_only_exact_identity_before_erasing_old_credentials() {
+        let dir = FixtureDir::new(); dir.seed();
+        let store = dir.tv();
+        assert!(store.local_mode());
+        assert!(store.token("https://example.com").is_none());
+        assert!(store.snapshot("https://example.com").is_none());
+        assert!(store.user("https://example.com").is_null());
+        // A line change before frontend boot must not erase the migration source.
+        let original = std::fs::read_to_string(dir.0.join("session.json")).unwrap();
+        store.clear();
+        assert_eq!(std::fs::read_to_string(dir.0.join("session.json")).unwrap(), original);
+        let pending = store.pending_migration().unwrap().unwrap();
+        assert_eq!(pending, MigrationIdentity { origin:"https://example.com".into(), user_id:17 });
+        let persisted = std::fs::read_to_string(dir.0.join("tv-library-migration.json")).unwrap();
+        assert!(!persisted.contains("token"));
+        assert!(!persisted.contains("nickname"));
+        let cleared: Session = serde_json::from_str(&std::fs::read_to_string(dir.0.join("session.json")).unwrap()).unwrap();
+        assert!(cleared.token.is_empty()); assert!(cleared.user.is_null());
+        assert!(!store.set_if_revision(store.revision(), "https://example.com", "new".into(), json!({"id":18})));
+    }
+
+    #[test]
+    fn tv_migration_survives_restart_and_acknowledges_once() {
+        let dir = FixtureDir::new(); dir.seed();
+        let identity = dir.tv().pending_migration().unwrap();
+        let restarted = dir.tv();
+        assert_eq!(restarted.pending_migration().unwrap(), identity);
+        assert!(restarted.complete_migration(Some(MigrationIdentity { origin:"https://example.com".into(), user_id:99 })).is_err());
+        assert_eq!(restarted.pending_migration().unwrap(), identity);
+        restarted.complete_migration(identity.clone()).unwrap();
+        restarted.complete_migration(identity).unwrap();
+        assert!(dir.tv().pending_migration().unwrap().is_none());
+        let marker: TvMigration = serde_json::from_str(&std::fs::read_to_string(dir.0.join("tv-library-migration.json")).unwrap()).unwrap();
+        assert!(marker.complete); assert!(marker.pending.is_none());
+    }
+
+    #[test]
+    fn tv_failed_identity_write_retains_credentials_without_using_them() {
+        let dir = FixtureDir::new(); dir.seed();
+        // A directory at the destination deterministically fails on all platforms.
+        let obstruction = dir.0.join("tv-library-migration.json");
+        std::fs::create_dir(&obstruction).unwrap();
+        let store = dir.tv();
+        let original = std::fs::read_to_string(dir.0.join("session.json")).unwrap();
+        assert!(store.pending_migration().is_err());
+        assert!(store.token("https://example.com").is_none());
+        assert_eq!(std::fs::read_to_string(dir.0.join("session.json")).unwrap(), original);
+        std::fs::remove_dir(obstruction).unwrap();
+        assert_eq!(store.pending_migration().unwrap().unwrap().user_id,17);
+    }
+
+    #[test]
+    fn standard_package_keeps_account_restore_and_ignores_tv_migration() {
+        let dir = FixtureDir::new(); dir.seed();
+        let store = SessionStore::new();
+        store.configure_package("com.hghubx.app"); store.bind(dir.0.clone());
+        assert!(!store.local_mode());
+        assert!(store.token("https://example.com").is_some());
+        assert_eq!(store.user("https://example.com")["id"], 17);
+        assert!(store.pending_migration().unwrap().is_none());
+        assert!(!dir.0.join("tv-library-migration.json").exists());
+    }
 }
 
 pub struct SessionStore {

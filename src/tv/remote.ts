@@ -57,7 +57,13 @@ function navigate(key: RemoteKey) {
 }
 function dispatch(key: RemoteKey) {
   pendingRestore = undefined; restoration++;
-  if (key === "back") { const now = performance.now(); if (now - lastBack < 180) return; lastBack = now; }
+  if (key === "back") {
+    const now = performance.now(), duplicate = now-lastBack<180;
+    // A trailing gate suppresses a continuous native callback burst rather
+    // than allowing one navigation every 180 ms throughout that burst.
+    lastBack = now;
+    if (duplicate) return;
+  }
   const root = surface();
   const modal = root instanceof HTMLElement ? root.dataset.tvModal : undefined;
   // The topmost modal owns every key, including media keys. A player/page
@@ -70,11 +76,15 @@ function dispatch(key: RemoteKey) {
   navigate(key);
 }
 const keys: Record<string, RemoteKey> = { ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right", Enter:"confirm", " ":"confirm", Escape:"back", Backspace:"back", BrowserBack:"back", GoBack:"back", MediaPlayPause:"playPause", MediaPlay:"play", MediaPause:"pause", MediaTrackNext:"next", MediaTrackPrevious:"previous" };
+const eventKey = (event: KeyboardEvent) => keys[event.key] || ({ 23:"confirm", 4:"back", 461:"back", 179:"playPause" } as Record<number, RemoteKey>)[event.keyCode];
 /** Exactly one keyboard listener and one native back subscription per WebView. */
 export function installRemoteController() {
   if (installed) return; installed = true;
+  const pressed = new Set<RemoteKey>();
+  const onePerPress = new Set<RemoteKey>(["confirm","back","playPause","play","pause","next","previous"]);
+  let backReleased = -Infinity;
   window.addEventListener("keydown", event => {
-    const key = keys[event.key] || ({ 23:"confirm", 4:"back", 461:"back", 179:"playPause" } as Record<number, RemoteKey>)[event.keyCode];
+    const key = eventKey(event);
     if (!key && event.key !== "Tab") return;
     event.preventDefault(); event.stopImmediatePropagation();
     if (event.key === "Tab") {
@@ -82,10 +92,26 @@ export function installRemoteController() {
       const all = focusables(surface()), index = all.indexOf(document.activeElement as HTMLElement);
       focusElement(all[(index + (event.shiftKey ? -1 : 1) + all.length) % all.length]); return;
     }
-    if (event.repeat && ["confirm", "back", "playPause", "next", "previous"].includes(key)) return;
+    if (onePerPress.has(key)) {
+      if (event.repeat || pressed.has(key)) return;
+      pressed.add(key);
+    }
     dispatch(key);
   }, true);
-  void addPluginListener("app", "back-button", () => dispatch("back")).catch(() => {});
+  window.addEventListener("keyup", event => {
+    const key = eventKey(event);
+    if (!onePerPress.has(key)) return;
+    pressed.delete(key);
+    if (key === "back") backReleased = performance.now();
+    // Suppress the browser's keyup Space/Enter activation after our keydown click.
+    event.preventDefault(); event.stopImmediatePropagation();
+  }, true);
+  window.addEventListener("blur", () => pressed.clear());
+  document.addEventListener("visibilitychange", () => { if (document.hidden) pressed.clear(); });
+  void addPluginListener("app", "back-button", () => {
+    if (pressed.has("back") || performance.now()-backReleased<180) return;
+    dispatch("back");
+  }).catch(() => {});
   // Repair a removed/blocked focused card using its old region and ordinal.
   let last: { region: string; index: number } | null = null;
   document.addEventListener("focusin", event => {
@@ -98,7 +124,10 @@ export function installRemoteController() {
     const root = surface(), regions = Array.from(root.querySelectorAll<HTMLElement>('[data-tv-region]'));
     const region = regions.find(r => visible(r) && r.dataset.tvRegion === last?.region);
     const list = region ? focusables(region) : focusables(root);
-    focusElement(list[Math.min(last?.index || 0, list.length - 1)] || list[0]);
+    // A removed card keeps its ordinal only within that same region. A new
+    // page/dialog starts at its own initial control, not the previous page's index.
+    const ordinal = region ? Math.max(last?.index || 0,0) : 0;
+    focusElement((!region && list.find(element=>element.hasAttribute("data-tv-initial"))) || list[Math.min(ordinal, list.length - 1)] || list[0]);
   }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "disabled", "aria-hidden", "inert"] });
 }
 

@@ -8,6 +8,7 @@ import { qualifyVisiblePosts } from "./postEligibility";
 import { indexMetadata } from "./search/catalog";
 import { useTv } from "./TvProvider";
 import { TvCard, TvStatus } from "./ui";
+import { useRemoteScope } from "./remote";
 const channels = [{id:"ai-duanju",label:"短剧"},{id:"ai-manju",label:"漫剧"},{id:"original",label:"原创"},{id:"rank",label:"排行"},{id:"topics",label:"专题"},{id:"tags",label:"标签"},{id:"posts",label:"吃瓜视频"}];
 export default function BrowsePage({ onOpen, active=true }: { onOpen: (content: TvContent) => void; active?: boolean }) {
   const { source, sourceKey } = useTv(), preferences = useContentPreferences();
@@ -68,6 +69,7 @@ export default function BrowsePage({ onOpen, active=true }: { onOpen: (content: 
       }catch(e){if(current())setError(String(e));}finally{if(current())setBusy(false);}
     })(); return()=>{disposed=true;seq.current++;};
   },[request,route,source,channel,selection,active]);
+  useRemoteScope({ id: "browse-subpage", priority: 10, onKey: key => { if (active && selection && key === "back") { setSelection(""); return true; } } });
   const retry=async()=>{
     if(busy)return;
     if(channel==="posts"&&retryable&&candidates.current.length){

@@ -7,6 +7,6 @@ function read(): PlaybackPreferences {
 }
 let state = read();
 const listeners = new Set<() => void>();
-export function setPlaybackPreferences(value: Partial<PlaybackPreferences>) { state = { ...state, ...value }; localStorage.setItem(KEY, JSON.stringify(state)); listeners.forEach(fn => fn()); }
+export function setPlaybackPreferences(value: Partial<PlaybackPreferences>) { state = { ...state, ...value }; try { localStorage.setItem(KEY, JSON.stringify(state)); } finally { listeners.forEach(fn => fn()); } }
 const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
 export const usePlaybackPreferences = () => useSyncExternalStore(subscribe, () => state);

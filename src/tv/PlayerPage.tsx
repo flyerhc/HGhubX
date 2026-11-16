@@ -24,7 +24,7 @@ type Props = {
   onBack: () => void;
   onMetadata?: (content: TvContent) => void;
   onPartChange?: (part: string) => void;
-  onPreferencesChange?: (preferences: { rate: number; quality: Quality }) => void;
+  onPreferencesChange?: (preferences: { rate: number; quality: Quality }) => void | Promise<void>;
 };
 
 type Prepared = { request: string; content: TvContent; parts: TvPart[]; streams: TvStreams; serial: number; transportEpoch: number };
@@ -40,6 +40,7 @@ export default function PlayerPage({ content, sourceKey, part: initialPart, resu
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState("");
   const [saveError, setSaveError] = useState("");
+  const [preferenceError, setPreferenceError] = useState("");
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(true);
   const [time, setTime] = useState(finiteSeconds(resumeSeconds));
@@ -227,7 +228,11 @@ export default function PlayerPage({ content, sourceKey, part: initialPart, resu
     setTime(0); setAttempt(value => value + 1); setModal(null); interact();
   };
   const onEnded = (token: string) => {
-    if (!currentSession(token) || endedSession.current === token) return;
+    if (!currentSession(token) || endedSession.current === token || document.hidden || !wanted.current) return;
+    const element = video.current?.el();
+    // VideoSurface also emits near-end from timeupdate. A paused seek/background
+    // clock update must not navigate; the actual ended event remains eligible.
+    if (!element || element.paused && !element.ended) return;
     endedSession.current = token;
     clock.current.seconds = clock.current.duration || clock.current.seconds;
     persist(); setPlaying(false); setWaiting(false); interact();
@@ -247,14 +252,22 @@ export default function PlayerPage({ content, sourceKey, part: initialPart, resu
       if (!wanted.current) video.current?.pause();
     } catch { /* Loaded-data/time callbacks may retry while the media is still attaching. */ }
   };
+  const persistPreferences = (next: { rate: number; quality: Quality }) => {
+    setPreferenceError("");
+    try {
+      Promise.resolve(latest.current.onPreferencesChange?.(next)).catch(cause => {
+        if (mounted.current) setPreferenceError(`本次设置已生效，但保存失败：${failureMessage(cause, "请重试")}`);
+      });
+    } catch (cause) { setPreferenceError(`本次设置已生效，但保存失败：${failureMessage(cause, "请重试")}`); }
+  };
   const changeQuality = (next: Quality) => {
     if (next === quality || next === "hevc" && !loaded?.streams.hevc) return;
     persist(); pendingRestore.current = clock.current.seconds; restoredSession.current = "";
     setPlaying(false); setWaiting(true); setQuality(next);
-    latest.current.onPreferencesChange?.({ rate, quality: next });
+    persistPreferences({ rate, quality: next });
   };
   const changeRate = (next: number) => {
-    setRate(next); video.current?.rate(next); latest.current.onPreferencesChange?.({ rate: next, quality });
+    setRate(next); video.current?.rate(next); persistPreferences({ rate: next, quality });
   };
   const toggleFavorite = async () => {
     if (favoritePending) return;
@@ -321,13 +334,14 @@ export default function PlayerPage({ content, sourceKey, part: initialPart, resu
         <div className="tv-player-heading"><h1>{item.title}</h1><span>{partLabel}</span></div>
         {seek !== null && <p className="tv-player-seek-hint" role="status">跳转预览 {fmtTime(seek)} · 确认跳转 · 返回取消</p>}
         {saveError && <p role="alert">{saveError}</p>}
+        {preferenceError && <p role="alert">{preferenceError}</p>}
         <div data-tv-region="player-progress" className="tv-player-progress-row">
           <button data-tv-focus="player:progress" className="tv-player-progress" disabled={!duration} aria-label={`播放进度 ${fmtTime(displayTime)}，总时长 ${fmtTime(duration)}。左右预览，确认跳转`} onClick={() => { if (seek !== null) commitSeek(); else { setSeek(time); interact(); } }}>
             <span className="tv-player-progress-track"><span style={{ width: `${percent}%` }} /></span><span className="tv-player-progress-time">{fmtTime(displayTime)} / {fmtTime(duration)}</span>
           </button>
         </div>
         <div data-tv-region="player-controls" className="tv-player-control-row">
-          <button data-tv-focus="player:play" disabled={!loaded || !!error} onClick={toggle}>{playing ? "暂停" : "播放"}</button>
+          <button data-tv-focus="player:play" data-tv-initial disabled={!loaded || !!error} onClick={toggle}>{playing ? "暂停" : "播放"}</button>
           <button data-tv-focus="player:parts" disabled={!loaded?.parts.length} onClick={() => { setModal("parts"); interact(); }}>{content.kind === "post" ? "分段" : "选集"}</button>
           <button data-tv-focus="player:options" onClick={() => { setModal("options"); interact(); }}>选项</button>
         </div>
@@ -338,6 +352,7 @@ export default function PlayerPage({ content, sourceKey, part: initialPart, resu
       <div data-tv-region="player-parts" data-tv-columns="4" className="tv-player-parts">{loaded.parts.map(candidate => <button key={candidate.id} data-tv-focus={`player:part:${candidate.id}`} aria-pressed={part === candidate.id} onClick={() => { if (part === candidate.id) setModal(null); else changePart(candidate.id); }}>{candidate.label}{part === candidate.id ? " · 当前" : ""}</button>)}</div>
     </TvModal>}
     {modal === "options" && !blocked && <TvModal id="player-options" title="播放选项" onClose={() => setModal(null)}>
+      {preferenceError && <div role="alert"><p>{preferenceError}</p><div data-tv-region="player-preference-retry"><button data-tv-focus="player:preference-retry" onClick={() => persistPreferences({ rate, quality })}>重新保存设置</button></div></div>}
       <h3>倍速</h3><div data-tv-region="player-rates" className="tv-player-options-row">{[.75, 1, 1.25, 1.5, 2].map(value => <button key={value} data-tv-focus={`player:rate:${value}`} aria-pressed={rate === value} onClick={() => changeRate(value)}>{value}×</button>)}</div>
       <h3>清晰度</h3><div data-tv-region="player-quality" className="tv-player-options-row"><button data-tv-focus="player:quality:main" aria-pressed={quality === "main"} onClick={() => changeQuality("main")}>默认线路</button><button data-tv-focus="player:quality:hevc" disabled={!loaded?.streams.hevc} aria-pressed={quality === "hevc"} onClick={() => changeQuality("hevc")}>HEVC 高清</button></div>
       <div data-tv-region="player-options-actions" className="tv-player-options-row"><button data-tv-focus="player:favorite" aria-pressed={favorite} disabled={!loaded || favoritePending} onClick={() => void toggleFavorite()}>{favorite ? "取消收藏" : "收藏作品"}</button><button data-tv-focus="player:detail" onClick={exit}>返回详情</button></div>
