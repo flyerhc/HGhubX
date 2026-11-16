@@ -75,6 +75,10 @@ const activate = async (page, key) => {
 };
 const calls = (page, command) => page.evaluate(command => window.__tvFixture.calls.filter(call => call.command === command), command);
 const activeKey = page => page.evaluate(() => document.activeElement?.getAttribute("data-tv-focus"));
+const screenshot = async (page, file) => {
+  await page.screenshot({ path: join(output, file), animations: "disabled" });
+  report.screenshots.push(file);
+};
 const catalogStatus = page => page.evaluate(async () => {
   const request = indexedDB.open("hghubx-tv-catalog-v1", 1);
   const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
@@ -85,7 +89,11 @@ try {
   process.env.VITE_APP_EDITION = "tv";
   mediaDirectory = await mkdtemp(join(tmpdir(), "hghubx-tv-media-"));
   execFileSync(process.env.FFMPEG_PATH || "ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10", "-t", "60", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-movflags", "+faststart", join(mediaDirectory, "fixture.mp4")], { timeout: 60000 });
-  vite = await createServer({ root, cacheDir: join(root, "node_modules/.vite-tv-remote"), server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, open: false } });
+  vite = await createServer({ root, cacheDir: join(root, "node_modules/.vite-tv-remote"),
+    // Worker-only dependencies otherwise arrive after the first page has mounted
+    // and Vite can invalidate its optimized graph in the middle of a scenario.
+    optimizeDeps: { include: ["pinyin-pro"] },
+    server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, open: false } });
   await vite.listen(); origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
   browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE || chromium.executablePath(), args: ["--autoplay-policy=no-user-gesture-required"] });
   report.browser = browser.version();
@@ -114,6 +122,8 @@ try {
     const card = page.locator('[data-tv-region="home-推荐"] [data-tv-focus="video:1"]');
     await card.waitFor(); await card.focus(); await page.keyboard.press("Enter");
     await page.locator('[data-tv-focus="detail:video:1:more"]').waitFor();
+    await page.waitForFunction(() => !document.querySelector('[data-tv-focus="detail:video:1:more"]')?.disabled);
+    await screenshot(page, "detail-1280x720.png");
     await activate(page, "detail:video:1:more");
     await page.getByRole("dialog", { name: "屏蔽标签" }).waitFor();
     for (const key of ["Tab", "ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Tab"]) {
@@ -143,14 +153,16 @@ try {
     const matches = await page.evaluate(async () => {
       const { queryCatalog } = await import("/src/tv/search/catalog.ts");
       const p = { blockedTags: [], paused: false, hideUntagged: false }, result = {};
-      for (const query of ["WDSJ", "wdsj", "DSJ", "wdai sj2", "W-S_D.J"]) result[query] = (await queryCatalog(window.__tvFixture.base, query, 0, p)).items.map(item => `${item.kind}:${item.id}`);
+      for (const query of ["WDSJ", "wdsj", "DSJ", "wdai sj2", "W-D_S.J"]) result[query] = (await queryCatalog(window.__tvFixture.base, query, 0, p)).items.map(item => `${item.kind}:${item.id}`);
       return result;
     });
-    assert.deepEqual(matches.WDSJ, matches.wdsj); assert.deepEqual(matches.WDSJ, matches["W-S_D.J"]);
+    assert.deepEqual(matches.WDSJ, matches.wdsj); assert.deepEqual(matches.WDSJ, matches["W-D_S.J"]);
     assert.deepEqual(matches.WDSJ.slice(0, 3), ["video:1", "video:4", "video:2"]); assert(matches.DSJ.includes("video:1")); assert.deepEqual(matches["wdai sj2"], ["video:5"]);
     for (const key of "WDSJ") await activate(page, `search:key:${key}`);
     await page.waitForTimeout(350); assert.equal(await activeKey(page), "search:key:J");
     await page.waitForFunction(() => document.querySelector(".tv-search-query")?.textContent === "WDSJ");
+    await page.locator('[data-tv-focus="search:video:1"]').waitFor();
+    await screenshot(page, "search-1280x720.png");
     assert.equal((await calls(page, "api_search")).length, 0); assert((await page.evaluate(() => window.__tvFixture.postMax)) <= 2);
     await page.evaluate(async () => { window.__tvFixture.catalogMode = "repeat"; await (await import("/src/tv/search/catalog.ts")).retryCatalog(window.__tvFixture.base, true); });
     await page.getByText(/上游返回了重复目录页/).waitFor();
@@ -193,6 +205,7 @@ try {
     await page.waitForFunction(() => document.querySelector(".tv-player-controls")?.hidden === true, null, { timeout: 10000 });
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => document.querySelector(".tv-player-controls")?.hidden === false && document.activeElement?.getAttribute("data-tv-focus") === "player:play");
+    await screenshot(page, "player-1280x720.png");
     assert.equal(await page.locator("video").evaluate(video => video.paused), false, "First confirm reveals without toggling");
     await page.keyboard.press("Enter"); await page.waitForFunction(() => document.querySelector("video")?.paused);
     await activate(page, "player:progress");
@@ -204,7 +217,12 @@ try {
     await page.keyboard.press("ArrowRight"); await page.keyboard.press("Enter");
     await page.waitForFunction(before => document.querySelector("video").currentTime >= before + 9, before);
     await page.locator("video").evaluate(video => { video.currentTime = video.duration - 1; });
-    await page.keyboard.press("MediaPlay");
+    // Playwright's physical-key table omits some Android media keys; dispatch
+    // the same DOM key the native remote emits through the real controller.
+    await page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "MediaPlay", bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "MediaPlay", bubbles: true }));
+    });
     await page.getByRole("dialog", { name: /播放完毕/ }).waitFor();
     assert.equal(await page.locator('[data-tv-focus="player:ended-next"]').count(), 0);
     assert((await calls(page, "api_play")).every(call => call.args.id === 1 && call.args.ep === 2));
@@ -222,6 +240,10 @@ try {
       assert(size.x >= 0 && size.right <= width && size.y >= 0 && size.bottom <= height);
       const file = `home-${width}x${height}.png`; await page.screenshot({ path: join(output, file), animations: "disabled" }); report.screenshots.push(file); measurements.push({ width, height, ...size });
     }
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await activate(page, "nav-settings");
+    await page.locator('[data-tv-focus="autoplay-next"]').waitFor();
+    await screenshot(page, "settings-1280x720.png");
     return measurements;
   });
   await scenario("standard-build-excludes-tv-resources", async () => {
