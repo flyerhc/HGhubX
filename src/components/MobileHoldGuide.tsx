@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { getHoldMenuBounds } from "../mobileHold";
+import { getHoldMenuBounds, getHoldPoint, type HoldRotation } from "../mobileHold";
 import { Button } from "./ios/controls";
 import { GuideFrame } from "./ios/overlays";
 import "../styles/mobile-hold-guide.css";
@@ -9,16 +9,17 @@ type Props = {
   onClose: () => void;
   target: RefObject<HTMLDivElement | null>;
   bottomInset: number;
+  rotation?: HoldRotation;
 };
 type Layout = { width: number; height: number; left: number; top: number; targetWidth: number; targetHeight: number };
 
-export default function MobileHoldGuide({ open, onClose, target, bottomInset }: Props) {
-  return <GuideFrame open={open} onClose={onClose} label="视频长按操作提示">
-    <GuideContent target={target} bottomInset={bottomInset} onClose={onClose} />
+export default function MobileHoldGuide({ open, onClose, target, bottomInset, rotation = 0 }: Props) {
+  return <GuideFrame open={open} onClose={onClose} label="视频长按操作提示" rotation={rotation}>
+    <GuideContent target={target} bottomInset={bottomInset} onClose={onClose} rotation={rotation} />
   </GuideFrame>;
 }
 
-function GuideContent({ target, bottomInset, onClose }: Omit<Props, "open">) {
+function GuideContent({ target, bottomInset, onClose, rotation = 0 }: Omit<Props, "open">) {
   const root = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<Layout | null>(null);
   const maskId = useId();
@@ -34,8 +35,13 @@ function GuideContent({ target, bottomInset, onClose }: Omit<Props, "open">) {
         setLayout(null);
         return;
       }
-      const next = { width: host.width, height: host.height, left: rect.left - host.left,
-        top: rect.top - host.top, targetWidth: rect.width, targetHeight: rect.height };
+      // Both elements are measured in screen coordinates; map the target's
+      // opposite corners into the guide's rotated local coordinate system.
+      const first = getHoldPoint(rect.left, rect.top, host, rotation);
+      const last = getHoldPoint(rect.right, rect.bottom, host, rotation);
+      const next = { width: first.width, height: first.height,
+        left: Math.min(first.x, last.x), top: Math.min(first.y, last.y),
+        targetWidth: Math.abs(last.x - first.x), targetHeight: Math.abs(last.y - first.y) };
       setLayout(previous => previous && Object.keys(next).every(key => previous[key as keyof Layout] === next[key as keyof Layout]) ? previous : next);
     };
     const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(measure); };
@@ -61,7 +67,7 @@ function GuideContent({ target, bottomInset, onClose }: Omit<Props, "open">) {
       document.removeEventListener("animationend", motionEnd, true);
       document.removeEventListener("transitionend", motionEnd, true);
     };
-  }, [target]);
+  }, [target, rotation]);
 
   const bounds = layout ? getHoldMenuBounds(layout.targetWidth, layout.targetHeight) : null;
   const compact = !!layout && layout.targetWidth > layout.targetHeight;
@@ -105,7 +111,7 @@ function GuideContent({ target, bottomInset, onClose }: Omit<Props, "open">) {
       </div>
     </>}
     <div className="mobile-hold-guide-footer">
-      <p>加速时上滑，可锁定 2×</p>
+      <p>加速时移入锁定框，松开锁定 2×</p>
       <Button className="mobile-hold-guide-done" onClick={onClose} data-autofocus>知道了</Button>
     </div>
   </div>;

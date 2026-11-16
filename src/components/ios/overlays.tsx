@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { createPortal } from "react-dom";
 import { Button } from "./controls";
 import { registerOverlayBack } from "../../back";
+import type { HoldRotation } from "../../mobileHold";
+import "../../styles/overlay-rotation.css";
 
 type Layer = { token: symbol; ancestors: symbol[]; element: HTMLElement; panel: HTMLElement; previous: HTMLElement | null; lastFocus: HTMLElement | null };
 const LayerContext = createContext<symbol[]>([]);
@@ -46,7 +48,10 @@ function syncBackground() {
     if (!previousInert.has(element)) previousInert.set(element, element.inert);
     element.inert = true;
   }
-  layers.forEach((layer, index) => layer.element.style.setProperty("--ios-overlay-order", String(index)));
+  layers.forEach((layer, index) => {
+    layer.element.style.setProperty("--ios-overlay-order", String(index));
+    layer.panel.setAttribute("data-tv-active-scope", String(layer === top));
+  });
   if (!top) { backgroundObserver?.disconnect(); backgroundObserver = null; return; }
   if (!backgroundObserver) {
     backgroundObserver = new MutationObserver(records => {
@@ -58,9 +63,9 @@ function syncBackground() {
   }
 }
 
-function DialogFrame({ open, onClose, children, kind, width, label, z }: {
+function DialogFrame({ open, onClose, children, kind, width, label, z, rotation = 0 }: {
   open: boolean; onClose: () => void; children: ReactNode;
-  kind: "modal" | "sheet" | "guide"; width?: number; label: string; z?: string;
+  kind: "modal" | "sheet" | "guide"; width?: number; label: string; z?: string; rotation?: HoldRotation;
 }) {
   const motion = !matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [mounted, setMounted] = useState(open);
@@ -72,6 +77,7 @@ function DialogFrame({ open, onClose, children, kind, width, label, z }: {
   const close = useRef(onClose);
   close.current = onClose;
   const host = document.fullscreenElement ?? document.getElementById("root") ?? document.body;
+  const inheritedRotation = rotation === 90 && !!host.closest(".fs-landscape");
   useEffect(() => {
     if (open) { setMounted(true); return; }
     const timeout = setTimeout(() => setMounted(false), motion ? 180 : 0);
@@ -125,6 +131,7 @@ function DialogFrame({ open, onClose, children, kind, width, label, z }: {
       removeBack();
       const index = layers.indexOf(layer);
       if (index !== -1) layers.splice(index, 1);
+      panel.removeAttribute("data-tv-active-scope");
       // A parent may unmount while a child remains open; retain the original opener.
       for (const remaining of layers) {
         if (remaining.previous && element.contains(remaining.previous)) remaining.previous = layer.previous;
@@ -141,6 +148,8 @@ function DialogFrame({ open, onClose, children, kind, width, label, z }: {
   return createPortal(
     <LayerContext.Provider value={descendants}>
       <div ref={ref} className={`ios-overlay ios-overlay-${kind} ${open ? "is-open" : "is-closing"} ${z ?? ""}`}
+        data-hold-rotation={rotation}
+        data-hold-own-rotation={inheritedRotation ? 0 : rotation}
         onFocusCapture={event => {
           // React autoFocus can run before this frame's layout effect.
           if (!layers.some(layer => layer.token === token) && event.relatedTarget instanceof HTMLElement
@@ -158,14 +167,14 @@ function DialogFrame({ open, onClose, children, kind, width, label, z }: {
   );
 }
 
-export function Modal(props: { open: boolean; onClose: () => void; children: ReactNode; width?: number; label?: string }) {
+export function Modal(props: { open: boolean; onClose: () => void; children: ReactNode; width?: number; label?: string; rotation?: HoldRotation }) {
   return <DialogFrame {...props} kind="modal" label={props.label ?? "对话框"} />;
 }
-export function Sheet(props: { open: boolean; onClose: () => void; children: ReactNode; z?: string; label?: string }) {
+export function Sheet(props: { open: boolean; onClose: () => void; children: ReactNode; z?: string; label?: string; rotation?: HoldRotation }) {
   return <DialogFrame {...props} kind="sheet" label={props.label ?? "详情面板"} />;
 }
 
 /** Full-player coach marks retain the shared focus trap, inert background and back handling. */
-export function GuideFrame(props: { open: boolean; onClose: () => void; children: ReactNode; label: string }) {
+export function GuideFrame(props: { open: boolean; onClose: () => void; children: ReactNode; label: string; rotation?: HoldRotation }) {
   return <DialogFrame {...props} kind="guide" />;
 }

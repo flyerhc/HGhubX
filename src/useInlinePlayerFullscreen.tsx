@@ -114,8 +114,8 @@ export function useInlinePlayerFullscreen({ active, src, videoRef, activity }: O
       else host.style.removeProperty(name);
     }
     Object.assign(host.style, expanded
-      ? { position: "fixed", inset: "0", width: "100%", height: "100dvh", zIndex: "90", background: "#000", overflow: "hidden" }
-      : { position: "relative", inset: "", width: "100%", height: "100%", zIndex: "", background: "", overflow: "" });
+      ? { position: "fixed", top: "0", right: "0", bottom: "0", left: "0", width: "100%", height: CSS.supports("height", "100dvh") ? "100dvh" : "100vh", zIndex: "90", background: "#000", overflow: "hidden" }
+      : { position: "relative", top: "", right: "", bottom: "", left: "", width: "100%", height: "100%", zIndex: "", background: "", overflow: "" });
     if (host.parentNode === destination) return;
     const video = videoRef.current;
     const playing = !!video && !video.paused && latest.current.activity.isPlayWanted();

@@ -1,3 +1,4 @@
+import { markStartupReady } from "./legacyRuntime";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
@@ -10,6 +11,8 @@ import { initAutoLine } from "./autoLine";
 import { APP_VERSION, LOCAL, logLine, platform, webviewVersion } from "./api";
 import Hls from "hls.js";
 import { installLayoutDiagnostics } from "./layoutDiagnostics";
+import { installTvNavigation } from "./tvNavigation";
+installTvNavigation();
 installPlaybackPageEvents();
 void initPlaybackLog();
 /* 环境指纹：写进始终记录的 debug.log。用户复制诊断时不用再自报版本、平台、内核版本 */
@@ -50,9 +53,14 @@ function AcceptedApplication() {
   return <AppProvider><App /></AppProvider>;
 }
 
+function StartupReady() {
+  React.useEffect(() => { markStartupReady(); }, []);
+  return <StartupGate><AcceptedApplication /></StartupGate>;
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <StartupGate><AcceptedApplication /></StartupGate>
+    <StartupReady />
   </React.StrictMode>,
 );
 installLayoutDiagnostics();

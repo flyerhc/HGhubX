@@ -4,10 +4,11 @@ import { MAX_BLOCKED_TAGS, MAX_TAG_LENGTH, normalizeTag, useContentPreferences }
 import { ICheck, IClose } from "../icons";
 import { Button } from "./ios/controls";
 import { Modal, Sheet } from "./ui";
+import type { HoldRotation } from "../mobileHold";
 import "../styles/content-preferences.css";
 
-export function TagBlockMenu({ open, tags, onClose, onSettings }: {
-  open: boolean; tags: readonly string[]; onClose: () => void; onSettings?: () => void;
+export function TagBlockMenu({ open, tags, onClose, onSettings, rotation = 0 }: {
+  open: boolean; tags: readonly string[]; onClose: () => void; onSettings?: () => void; rotation?: HoldRotation;
 }) {
   const { preferences, revision, storageError, blockTags, isTagBlocked } = useContentPreferences();
   const [submittedAt, setSubmittedAt] = useState<number | null>(null);
@@ -66,6 +67,6 @@ export function TagBlockMenu({ open, tags, onClose, onSettings }: {
       </div>
     </footer>
   </div>;
-  return isMobile ? <Sheet open={open} onClose={onClose} label="不感兴趣" z="content-preference-overlay">{content}</Sheet>
-    : <Modal open={open} onClose={onClose} label="不感兴趣" width={400}>{content}</Modal>;
+  return isMobile ? <Sheet open={open} onClose={onClose} label="不感兴趣" z="content-preference-overlay" rotation={rotation}>{content}</Sheet>
+    : <Modal open={open} onClose={onClose} label="不感兴趣" width={400} rotation={rotation}>{content}</Modal>;
 }

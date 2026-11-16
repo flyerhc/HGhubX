@@ -75,7 +75,7 @@ export default function UsageAgreement({ onAccept }: { onAccept: () => void }) {
         <h1 ref={titleRef} tabIndex={-1} id="hg-agreement-title">{declined ? "应用尚未启动" : "使用条款与免责声明"}</h1>
         <p id="hg-agreement-summary" className="hg-agreement-summary">{declined ? "你尚未同意协议，主界面与内容不会加载。你可以关闭应用，或返回重新阅读。" : "请阅读以下条款，特别是地区限制。同意记录仅保存在本设备，条款更新后需重新确认。"}</p>
       </header>
-      {!declined && <div className="hg-agreement-scroll" tabIndex={0} aria-label="协议正文">
+      {!declined && <div className="hg-agreement-scroll" tabIndex={0} data-tv-scroll data-tv-initial aria-label="协议正文">
         <UsageAgreementText />
       </div>}
       <footer className="hg-agreement-footer">

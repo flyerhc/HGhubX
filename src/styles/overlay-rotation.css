@@ -1,0 +1,37 @@
+/* The portal is outside the CSS-rotated player, so it needs the same rotation
+   exactly once. Physical landscape uses rotation=0 and the existing layout. */
+.ios-overlay[data-hold-own-rotation="90"] {
+  position:fixed;
+  top:50%; left:50%; right:auto; bottom:auto;
+  width:100vh; height:100vw;
+  width:100dvh; height:100dvw;
+  transform:translate(-50%,-50%) rotate(90deg);
+  transform-origin:center center;
+  --sab:0px;
+}
+.ios-overlay[data-hold-rotation="90"] .ios-dialog {
+  max-height:calc(100vw - 24px);
+  max-height:calc(100dvw - 24px);
+}
+.ios-overlay-sheet[data-hold-rotation="90"] {
+  align-items:flex-end;
+  padding:0 12px 8px;
+}
+.ios-overlay-sheet[data-hold-rotation="90"] .ios-dialog {
+  padding-bottom:8px;
+}
+.ios-overlay[data-hold-rotation="90"] .content-tag-menu,
+.ios-overlay[data-hold-rotation="90"] .content-tag-menu[data-expanded="true"] {
+  max-height:calc(100vw - 64px);
+  max-height:calc(100dvw - 64px);
+}
+.ios-overlay.ios-overlay-guide[data-hold-rotation="90"] .ios-dialog {
+  max-width:none;
+  max-height:none;
+}
+.ios-overlay[data-hold-rotation="90"] .mobile-hold-guide-heading {
+  top:12px;
+}
+.ios-overlay[data-hold-rotation="90"] .mobile-hold-guide-footer {
+  bottom:10px;
+}
